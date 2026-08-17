@@ -1354,7 +1354,10 @@ impl<'code> DocumentBuilder<'code> {
             .skip_while(|idx| *idx == self.newline())
             .collect::<Vec<_>>();
         while let Some(last) = trimmed.last()
-            && let Some(penultimate) = trimmed.get(trimmed.len() - 2)
+            && let Some(penultimate) = trimmed
+                .len()
+                .checked_sub(2)
+                .and_then(|index| trimmed.get(index))
             && *last == self.newline()
             && *penultimate == self.newline()
         {
