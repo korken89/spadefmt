@@ -1,0 +1,5 @@
+entity bar(
+    #[no_mangle] longggggggggggggggggggggggggggggggggggggggggggggggggggggg: int<
+        8,
+    >,
+) {}

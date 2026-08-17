@@ -1,0 +1,5 @@
+pipeline(2) p(clk: clock) -> bool {
+    reg;
+    reg;
+    true
+}

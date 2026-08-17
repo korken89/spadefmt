@@ -1,0 +1,3 @@
+fn first(x: (bool, bool)) -> bool {
+    x#0
+}

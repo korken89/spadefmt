@@ -16,23 +16,13 @@
 use std::{
     env, fs,
     io::{self, IsTerminal},
-    rc::Rc,
-    sync::RwLock,
 };
 
-use snafu::{OptionExt, ResultExt, Whatever};
-pub use spade;
-use spade::error_handling::Reportable;
-use spade_codespan_reporting::{files::SimpleFiles, term::termcolor::Buffer};
-use spade_diagnostics::{emitter::CodespanEmitter, CodeBundle, DiagHandler};
-use spade_parser::logos::Logos;
+use snafu::{ResultExt, Whatever, whatever};
 use spadefmt::{
     cli::Opts,
-    comment_insertion::CommentInserter,
     config::Config,
-    document::{self, ResolvedPrintingContext},
-    document_builder::DocumentBuilder,
-    resolve_try_catch::{resolve_try_catch, PrintingContext},
+    format::{FormatError, parse_source},
 };
 
 #[snafu::report]
@@ -57,85 +47,33 @@ fn main() -> Result<(), Whatever> {
     let code = fs::read_to_string(&opts.file)
         .whatever_context(format!("Failed to read file at {}", opts.file))?;
 
-    let mut files = SimpleFiles::new();
-    let file_id = files.add(opts.file.to_string(), code.clone());
-
-    let diagnostic_handler = DiagHandler::new(Box::new(CodespanEmitter));
-
-    let code_bundle = Rc::new(RwLock::new(CodeBundle { files }));
-
-    let mut buffer = if opts.no_color || !io::stderr().is_terminal() {
-        Buffer::no_color()
-    } else {
-        Buffer::ansi()
-    };
-
-    let mut error_handler = spade::error_handling::ErrorHandler::new(
-        &mut buffer,
-        diagnostic_handler,
-        code_bundle.clone(),
-    );
-
-    let mut parser = spade_parser::Parser::new(
-        spade_parser::lexer::TokenKind::lexer(&code),
-        file_id,
-    );
-
-    let root = {
-        let root_opt =
-            parser.top_level_module_body().or_report(&mut error_handler);
-        error_handler.drain_diag_list(&mut parser.diags);
-        print!("{}", String::from_utf8_lossy(buffer.as_slice()));
-        root_opt.whatever_context("Exiting due to errors")?
-    };
-
-    let test_config_contents = fs::read_to_string("spadefmt.toml")
+    let config_contents = fs::read_to_string("spadefmt.toml")
         .whatever_context("test file spadefmt.toml should be there")?;
-    let test_config = toml::from_str::<Config>(&test_config_contents)
+    let config = toml::from_str::<Config>(&config_contents)
         .whatever_context("Failed to decode config")?;
 
-    let indent = test_config.indent.inner;
+    let color = !opts.no_color && io::stderr().is_terminal();
 
-    let (mut document_store, root_idx) = {
-        let code_bundle_guard = code_bundle.read().unwrap();
-        let file = code_bundle_guard.files.get(file_id).unwrap();
-        DocumentBuilder::new(test_config.indent.inner as isize).build_root(
-            &root,
-            file,
-            &mut CommentInserter::new(parser.comments(), &code),
-        )
+    let parsed = match parse_source(opts.file.as_str(), &code, color) {
+        Ok(parsed) => parsed,
+        Err(FormatError::Parse { diagnostics }) => {
+            print!("{diagnostics}");
+            whatever!("Exiting due to errors")
+        }
+        Err(error) => {
+            return Err(error).whatever_context("Failed to parse input");
+        }
     };
+    // Flushed before formatting, which can still panic on unsupported
+    // constructs.
+    print!("{}", parsed.diagnostics);
 
-    if opts.debug {
-        let mut buffer = String::new();
-        let mut f = inform::fmt::IndentWriter::new(&mut buffer, indent);
-        document::debug_print(&document_store, &mut f, root_idx)
-            .whatever_context("Failed to print document")?;
-        println!("{buffer}");
-        return Ok(());
-    }
-
-    let new_root_idx = resolve_try_catch(
-        &mut document_store,
-        root_idx,
-        &mut PrintingContext::new(test_config.max_width.inner),
-    );
-
-    // &mut CommentInserter::new(parser.comments(), &code, |byte_index| {
-    //     file.line_index((), byte_index).unwrap()
-    // }),
-    let mut buffer = String::new();
-    let mut f = inform::fmt::IndentWriter::new(&mut buffer, indent);
-    document::print_resolved(
-        &document_store,
-        &mut f,
-        new_root_idx,
-        &mut ResolvedPrintingContext::new(),
-        false,
-        &mut false,
-    )
-    .whatever_context("Failed to print document")?;
-    println!("{buffer}");
+    let output = if opts.debug {
+        parsed.debug_document(&config)
+    } else {
+        parsed.format(&config)
+    };
+    print!("{}", output.whatever_context("Failed to print document")?);
 
     Ok(())
 }
