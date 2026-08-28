@@ -17,3 +17,7 @@ SPADEFMT_BLESS=1 cargo test
 ```
 
 and review the resulting diff before committing.
+
+The full corpus includes the `asts/swim-templates` submodule; fetch it with
+`git submodule update --init` (or clone with `--recursive`). Without it the
+swim-templates part of the panic sweep is skipped.

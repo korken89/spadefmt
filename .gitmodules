@@ -1,0 +1,3 @@
+[submodule "asts/swim-templates"]
+	path = asts/swim-templates
+	url = https://gitlab.com/spade-lang/swim-templates.git

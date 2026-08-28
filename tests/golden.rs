@@ -44,12 +44,22 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 
 /// Fixtures (relative to `asts/`) that hit a `todo!()` in the document
 /// builder. Fixing a construct moves its fixture up into `asts/` as a golden
-/// pair and removes it here.
+/// pair and removes it here. `swim-templates/` entries are only asserted when
+/// the submodule is initialized.
 const KNOWN_PANICS: &[&str] = &[
     "panics/named_arg_pattern.spade",
     "panics/pipeline_reg.spade",
     "panics/tuple_index.spade",
     "panics/unsafe_block.spade",
+    "swim-templates/ccgm1a1-evb/src/main.spade",
+    "swim-templates/ecpix5/src/main.spade",
+    "swim-templates/fomu-pvt/src/main.spade",
+    "swim-templates/go-board/src/main.spade",
+    "swim-templates/icebreaker/src/main.spade",
+    "swim-templates/tangnano20k/src/main.spade",
+    "swim-templates/tangnano4k/src/main.spade",
+    "swim-templates/tangnano9k/src/main.spade",
+    "swim-templates/ulx3s_85k/src/main.spade",
 ];
 
 const BLESS_HINT: &str =
@@ -355,7 +365,15 @@ fn must_not_panic() {
             _ => {}
         }
     }
+    // A plain clone (no `git submodule update --init`) leaves swim-templates
+    // empty; its entries are then absent by design, not stale.
+    let swim_populated = files
+        .iter()
+        .any(|file| file.starts_with(asts_dir().join("swim-templates")));
     for entry in unvisited {
+        if !swim_populated && entry.starts_with("swim-templates/") {
+            continue;
+        }
         failures.push(format!("{entry}: listed in KNOWN_PANICS but not swept"));
     }
 
