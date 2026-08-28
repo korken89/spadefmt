@@ -15,14 +15,15 @@ readme = "README.md"
 [workspace.dependencies]
 argh = "0.1.13"
 camino = "1.1.9"
+rayon = "1.11"
 snafu = "0.8.5"
 
-spade-lang = { git = "https://gitlab.com/spade-lang/spade.git", rev = "8641b6a8cda6dac163bbe41ff32ebe23bfb7197d" }
-spade-diagnostics = { git = "https://gitlab.com/spade-lang/spade.git", rev = "8641b6a8cda6dac163bbe41ff32ebe23bfb7197d" }
-spade-parser = { git = "https://gitlab.com/spade-lang/spade.git", rev = "8641b6a8cda6dac163bbe41ff32ebe23bfb7197d" }
+spade-lang = { git = "https://gitlab.com/spade-lang/spade.git", rev = "7e0bf7883d8a23dff89b5e38ce5c5f24761fafe5" }
+spade-diagnostics = { git = "https://gitlab.com/spade-lang/spade.git", rev = "7e0bf7883d8a23dff89b5e38ce5c5f24761fafe5" }
+spade-parser = { git = "https://gitlab.com/spade-lang/spade.git", rev = "7e0bf7883d8a23dff89b5e38ce5c5f24761fafe5" }
 spade-codespan-reporting = "0.12.0"
-spade-ast = { git = "https://gitlab.com/spade-lang/spade.git", rev = "8641b6a8cda6dac163bbe41ff32ebe23bfb7197d" }
-spade-common = { git = "https://gitlab.com/spade-lang/spade.git", rev = "8641b6a8cda6dac163bbe41ff32ebe23bfb7197d" }
+spade-ast = { git = "https://gitlab.com/spade-lang/spade.git", rev = "7e0bf7883d8a23dff89b5e38ce5c5f24761fafe5" }
+spade-common = { git = "https://gitlab.com/spade-lang/spade.git", rev = "7e0bf7883d8a23dff89b5e38ce5c5f24761fafe5" }
 
 serde = { version = "1.0.217", features = ["derive"] }
 toml = "0.9.5"

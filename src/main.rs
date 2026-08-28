@@ -57,7 +57,7 @@ fn main() -> Result<(), Whatever> {
     let parsed = match parse_source(opts.file.as_str(), &code, color) {
         Ok(parsed) => parsed,
         Err(FormatError::Parse { diagnostics }) => {
-            print!("{diagnostics}");
+            eprint!("{diagnostics}");
             whatever!("Exiting due to errors")
         }
         Err(error) => {
@@ -65,8 +65,9 @@ fn main() -> Result<(), Whatever> {
         }
     };
     // Flushed before formatting, which can still panic on unsupported
-    // constructs.
-    print!("{}", parsed.diagnostics);
+    // constructs. Stderr, so diagnostics never mix into the formatted
+    // output.
+    eprint!("{}", parsed.diagnostics);
 
     let output = if opts.debug {
         parsed.debug_document(&config)

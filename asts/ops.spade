@@ -1,0 +1,31 @@
+struct Ops {
+    flag: bool
+}
+
+impl Ops {
+    fn by_ref(&self) -> bool {
+        true
+    }
+
+    fn by_wire(wire self, a: bool, b: bool) -> bool {
+        let l1 = a && b;
+        let l2 = a || b;
+        let l3 = a ^^ b;
+        let b1 = a & b;
+        let b2 = a | b;
+        let b3 = a ^ b;
+        l1
+    }
+}
+
+fn tri() -> bit {
+    HIGHIMP
+}
+
+fn braced<#uint N>(x: [bool; {N + 1}]) -> bool {
+    true
+}
+
+fn empty_match(x: bool) -> bool {
+    match x {}
+}

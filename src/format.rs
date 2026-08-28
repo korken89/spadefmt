@@ -11,7 +11,11 @@
 // copy of the GNU General Public License along with spadefmt. If not, see
 // <https://www.gnu.org/licenses/>.
 
-use std::{fmt, rc::Rc, sync::RwLock};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use itertools::Itertools;
 use snafu::{ResultExt, Snafu};
@@ -20,7 +24,7 @@ use spade_ast::ModuleBody;
 use spade_codespan_reporting::{files::SimpleFiles, term::termcolor::Buffer};
 use spade_common::location_info::Loc;
 use spade_diagnostics::{CodeBundle, DiagHandler, emitter::CodespanEmitter};
-use spade_parser::{Comment, logos::Logos};
+use spade_parser::Comment;
 
 use crate::{
     comment_insertion::CommentInserter,
@@ -36,7 +40,7 @@ use crate::{
 pub struct Formatted {
     /// Formatted source with no trailing whitespace, ending with a newline.
     pub text: String,
-    /// Rendered parser warnings, empty if there were none.
+    /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
 }
 
@@ -58,9 +62,9 @@ pub struct Parsed {
     code: String,
     root: Loc<ModuleBody>,
     comments: Vec<Comment>,
-    code_bundle: Rc<RwLock<CodeBundle>>,
+    code_bundle: Arc<RwLock<CodeBundle>>,
     file_id: usize,
-    /// Rendered parser warnings, empty if there were none.
+    /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
 }
 
@@ -75,7 +79,10 @@ pub fn parse_source(
     let file_id = files.add(file_name.to_string(), code.to_string());
 
     let diagnostic_handler = DiagHandler::new(Box::new(CodespanEmitter));
-    let code_bundle = Rc::new(RwLock::new(CodeBundle { files }));
+    let code_bundle = Arc::new(RwLock::new(CodeBundle {
+        files,
+        file_ids: HashMap::from_iter([(file_name.to_string(), file_id)]),
+    }));
 
     let mut buffer = if color {
         Buffer::ansi()
@@ -89,16 +96,16 @@ pub fn parse_source(
         code_bundle.clone(),
     );
 
-    let mut parser = spade_parser::Parser::new(
-        spade_parser::lexer::TokenKind::lexer(code),
-        file_id,
-    );
+    let mut parser = spade_parser::Parser::new(code, file_id, None);
 
     let root_opt = parser.top_level_module_body().or_report(&mut error_handler);
     error_handler.drain_diag_list(&mut parser.diags);
+    // The parser can recover from errors and return a module body with the
+    // offending items dropped; formatting that would silently delete code.
+    let failed = error_handler.failed();
     let diagnostics = String::from_utf8_lossy(buffer.as_slice()).into_owned();
 
-    let Some(root) = root_opt else {
+    let Some(root) = root_opt.filter(|_| !failed) else {
         return ParseSnafu { diagnostics }.fail();
     };
 

@@ -14,13 +14,13 @@
 use std::cell::RefCell;
 
 use spade_ast as ast;
+use spade_ast::token;
 use spade_codespan_reporting::files::{Files, SimpleFile};
 use spade_common::{
     location_info::{Loc, WithLocation},
-    name::{Identifier, Path},
+    name::{Identifier, Path, Visibility},
 };
 use spade_diagnostics::codespan::Span;
-use spade_parser::lexer;
 
 use crate::{
     comment_insertion::CommentInserter,
@@ -83,10 +83,19 @@ can_build!(Loc<ast::TraitSpec>: build_trait_spec);
 can_build!(ast::NamedArgument: build_named_argument);
 can_build!(Loc<ast::Pattern>: build_pattern);
 
-pub type AstParameter =
-    (ast::AttributeList, Loc<Identifier>, Loc<ast::TypeSpec>);
+pub type AstParameter = (
+    ast::AttributeList,
+    Option<Loc<ast::WireMarker>>,
+    Loc<Identifier>,
+    Loc<ast::TypeSpec>,
+);
 
 can_build!(AstParameter: build_parameter);
+
+/// An array literal element with an optional `'label`.
+pub type AstArrayElement = (Option<Loc<Identifier>>, Loc<ast::Expression>);
+
+can_build!(AstArrayElement: build_array_element);
 
 can_build!(ast::EnumVariant: build_enum_variant);
 
@@ -157,7 +166,7 @@ impl HasLineNumber for AstParameter {
             .0
             .first()
             .map(|first| first.span)
-            .unwrap_or(self.1.span)
+            .unwrap_or(self.2.span)
             .line_index(builder)
     }
 
@@ -166,19 +175,79 @@ impl HasLineNumber for AstParameter {
             .0
             .first()
             .map(|first| first.span)
-            .unwrap_or(self.1.span)
+            .unwrap_or(self.2.span)
             .end_line_index(builder)
+    }
+}
+
+impl HasLineNumber for AstArrayElement {
+    fn line_index(&self, builder: &DocumentBuilder) -> usize {
+        self.0
+            .as_ref()
+            .map(|label| label.span)
+            .unwrap_or(self.1.span)
+            .line_index(builder)
+    }
+
+    fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
+        self.1.end_line_index(builder)
+    }
+}
+
+/// Source spelling per the lexer's token table. `spade_ast`'s `Display`
+/// impls target diagnostics and swap the logical/bitwise pairs, so they
+/// must not be used for output.
+fn binary_operator_str(op: &ast::BinaryOperator) -> &'static str {
+    match op {
+        ast::BinaryOperator::Add => "+",
+        ast::BinaryOperator::Sub => "-",
+        ast::BinaryOperator::Mul => "*",
+        ast::BinaryOperator::Div => "/",
+        ast::BinaryOperator::Mod => "%",
+        ast::BinaryOperator::Eq => "==",
+        ast::BinaryOperator::Neq => "!=",
+        ast::BinaryOperator::Lt => "<",
+        ast::BinaryOperator::Gt => ">",
+        ast::BinaryOperator::Le => "<=",
+        ast::BinaryOperator::Ge => ">=",
+        ast::BinaryOperator::LogicalAnd => "&&",
+        ast::BinaryOperator::LogicalOr => "||",
+        ast::BinaryOperator::LogicalXor => "^^",
+        ast::BinaryOperator::LeftShift => "<<",
+        ast::BinaryOperator::RightShift => ">>",
+        ast::BinaryOperator::ArithmeticRightShift => ">>>",
+        ast::BinaryOperator::BitwiseAnd => "&",
+        ast::BinaryOperator::BitwiseOr => "|",
+        ast::BinaryOperator::BitwiseXor => "^",
+        ast::BinaryOperator::WrappingAdd => "+.",
+        ast::BinaryOperator::WrappingSub => "-.",
+        ast::BinaryOperator::WrappingMul => "*.",
+        ast::BinaryOperator::WrappingLeftShift => "<<.",
+        ast::BinaryOperator::WrappingRightShift => ">>.",
+    }
+}
+
+/// See [`binary_operator_str`].
+fn unary_operator_str(op: &ast::UnaryOperator) -> &'static str {
+    match op {
+        ast::UnaryOperator::Sub => "-",
+        ast::UnaryOperator::Not => "!",
+        ast::UnaryOperator::BitwiseNot => "~",
+        ast::UnaryOperator::WrappingSub => "-.",
+        ast::UnaryOperator::Dereference => "*",
+        ast::UnaryOperator::Reference => "&",
     }
 }
 
 fn span_of_item(item: &ast::Item) -> Span {
     match item {
         spade_ast::Item::Unit(unit) => unit.span,
+        spade_ast::Item::MacroDef(macro_def) => macro_def.span,
         spade_ast::Item::TraitDef(trait_definition) => trait_definition.span,
         spade_ast::Item::Type(ty) => ty.span,
         spade_ast::Item::ExternalMod(external_module) => external_module.span,
         spade_ast::Item::Module(module) => module.span,
-        spade_ast::Item::Use(use_) => use_.span,
+        spade_ast::Item::Use(_, use_) => use_.span,
         spade_ast::Item::ImplBlock(impl_block) => impl_block.span,
     }
 }
@@ -243,6 +312,12 @@ impl<'code> DocumentBuilder<'code> {
     ) -> (InternedDocumentStore, DocumentIdx) {
         self.file.replace(Some(file));
 
+        // `//!` docs are tokens, not comments, so the comment inserter
+        // never sees them.
+        if !root.documentation.is_empty() {
+            todo!()
+        }
+
         let mut list = vec![];
 
         let mut last_line_index = 0;
@@ -287,6 +362,7 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match item {
             ast::Item::Unit(unit) => self.build_unit(unit, comment_inserter),
+            ast::Item::MacroDef(_) => todo!(),
             ast::Item::TraitDef(_) => todo!(),
             ast::Item::Type(type_declaration) => {
                 self.build_type_declaration(type_declaration, comment_inserter)
@@ -295,7 +371,9 @@ impl<'code> DocumentBuilder<'code> {
             ast::Item::Module(module) => {
                 self.build_module(module, comment_inserter)
             }
-            ast::Item::Use(use_statement) => self.build_use(use_statement),
+            ast::Item::Use(attributes, use_statements) => {
+                self.build_use(attributes, use_statements)
+            }
             ast::Item::ImplBlock(impl_block) => {
                 self.build_impl_block(impl_block, comment_inserter)
             }
@@ -311,6 +389,17 @@ impl<'code> DocumentBuilder<'code> {
 
         list.push(self.build_attribute_list(&unit.head.attributes, true));
 
+        if let Some(visibility) = self.visibility_prefix(&unit.head.visibility)
+        {
+            list.push(visibility);
+        }
+        if unit.head.unsafe_token.is_some() {
+            list.push(self.text("unsafe "));
+        }
+        if unit.head.extern_token.is_some() {
+            list.push(self.text("extern "));
+        }
+
         list.push(match &*unit.head.unit_kind {
             ast::UnitKind::Function => self.text("fn"),
             ast::UnitKind::Entity => self.text("entity"),
@@ -325,18 +414,18 @@ impl<'code> DocumentBuilder<'code> {
 
         if let Some(type_params) = &unit.head.type_params {
             list.push(self.group(
-                lexer::TokenKind::Lt.as_str(),
+                token::TokenKind::Lt.as_str(),
                 &type_params.inner,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::Gt.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::Gt.as_str(),
                 comment_inserter,
             ));
         }
 
         let parameter_list_doc =
             self.build_parameter_list(&unit.head.inputs, comment_inserter);
-        let parameter_open = self.token(lexer::TokenKind::OpenParen);
-        let parameter_close = self.token(lexer::TokenKind::CloseParen);
+        let parameter_open = self.token(token::TokenKind::OpenParen);
+        let parameter_close = self.token(token::TokenKind::CloseParen);
 
         let output_type_doc =
             if let Some((_, output_type)) = &unit.head.output_type {
@@ -391,22 +480,27 @@ impl<'code> DocumentBuilder<'code> {
         type_declaration: &Loc<ast::TypeDeclaration>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        let visibility = self.visibility_prefix(&type_declaration.visibility);
         match &type_declaration.kind {
             ast::TypeDeclKind::Enum(enum_decl) => {
-                let mut list = vec![self.text("enum ")];
+                let mut list = vec![
+                    self.build_attribute_list(&enum_decl.attributes, true),
+                ];
+                list.extend(visibility);
+                list.push(self.text("enum "));
                 list.push(self.text(enum_decl.name.to_string()));
                 if let Some(generic_args) = &type_declaration.generic_args {
                     list.push(self.group(
-                        lexer::TokenKind::Lt.as_str(),
+                        token::TokenKind::Lt.as_str(),
                         &generic_args.inner,
-                        lexer::TokenKind::Comma,
-                        lexer::TokenKind::Gt.as_str(),
+                        token::TokenKind::Comma,
+                        token::TokenKind::Gt.as_str(),
                         comment_inserter,
                     ));
                 }
                 let options_doc = self.group_raw(
                     &enum_decl.variants,
-                    lexer::TokenKind::Comma,
+                    token::TokenKind::Comma,
                     comment_inserter,
                 );
                 list.extend([
@@ -424,17 +518,18 @@ impl<'code> DocumentBuilder<'code> {
                 self.list(list)
             }
             ast::TypeDeclKind::Struct(struct_decl) => {
-                let mut list = vec![self.text("struct ")];
-                if struct_decl.is_port() {
-                    list.push(self.text("port "));
-                }
+                let mut list = vec![
+                    self.build_attribute_list(&struct_decl.attributes, true),
+                ];
+                list.extend(visibility);
+                list.push(self.text("struct "));
                 list.push(self.text(struct_decl.name.to_string()));
                 if let Some(generic_args) = &type_declaration.generic_args {
                     list.push(self.group(
-                        lexer::TokenKind::Lt.as_str(),
+                        token::TokenKind::Lt.as_str(),
                         &generic_args.inner,
-                        lexer::TokenKind::Comma,
-                        lexer::TokenKind::Gt.as_str(),
+                        token::TokenKind::Comma,
+                        token::TokenKind::Gt.as_str(),
                         comment_inserter,
                     ));
                 }
@@ -456,6 +551,7 @@ impl<'code> DocumentBuilder<'code> {
                 ]);
                 self.list(list)
             }
+            ast::TypeDeclKind::Alias(_) => todo!(),
         }
     }
 
@@ -464,6 +560,11 @@ impl<'code> DocumentBuilder<'code> {
         variant: &ast::EnumVariant,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        // Variants render inside flattenable groups, where attribute and
+        // doc lines cannot be emitted safely yet.
+        if !variant.attributes.0.is_empty() {
+            todo!()
+        }
         let mut list = vec![self.text(variant.name.to_string())];
         if let Some(parameter_list) = &variant.args {
             let parameter_list_doc =
@@ -489,7 +590,9 @@ impl<'code> DocumentBuilder<'code> {
         item: &Loc<ast::Module>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        self.list([
+        let mut list = vec![self.build_attribute_list(&item.attributes, true)];
+        list.extend(self.visibility_prefix(&item.visibility));
+        list.extend([
             self.text(format!("mod {} {{", item.name)),
             self.newline(),
             self.nest(
@@ -498,7 +601,8 @@ impl<'code> DocumentBuilder<'code> {
             ),
             self.newline(),
             self.text("}"),
-        ])
+        ]);
+        self.list(list)
     }
 
     pub fn build_module_body(
@@ -506,6 +610,10 @@ impl<'code> DocumentBuilder<'code> {
         body: &Loc<ast::ModuleBody>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        if !body.documentation.is_empty() {
+            todo!()
+        }
+
         let mut list = vec![];
         let mut last_line_index = body.line_index(self);
 
@@ -544,11 +652,23 @@ impl<'code> DocumentBuilder<'code> {
 
     pub fn build_use(
         &self,
-        use_statement: &Loc<ast::UseStatement>,
+        attributes: &ast::AttributeList,
+        use_statements: &Loc<Vec<ast::UseStatement>>,
     ) -> DocumentIdx {
-        let ast::UseStatement { path, alias } = &use_statement.inner;
+        // `use a::{b, c}` expands to several statements whose brace tree
+        // cannot be reconstructed from the AST alone yet.
+        let [use_statement] = use_statements.inner.as_slice() else {
+            todo!()
+        };
+        let ast::UseStatement {
+            visibility,
+            path,
+            alias,
+        } = use_statement;
 
-        let mut line = vec![self.text("use "), self.build_path(path)];
+        let mut line = vec![self.build_attribute_list(attributes, true)];
+        line.extend(self.visibility_prefix(visibility));
+        line.extend([self.text("use "), self.build_path(path)]);
 
         if let Some(alias) = alias {
             line.push(self.text(format!(" as {alias}")));
@@ -566,10 +686,10 @@ impl<'code> DocumentBuilder<'code> {
         let mut list = vec![self.text("impl")];
         if let Some(type_params) = &impl_block.type_params {
             list.push(self.group(
-                lexer::TokenKind::Lt.as_str(),
+                token::TokenKind::Lt.as_str(),
                 &type_params.inner,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::Gt.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::Gt.as_str(),
                 comment_inserter,
             ));
         }
@@ -583,6 +703,9 @@ impl<'code> DocumentBuilder<'code> {
         list.push(self.build_type_spec(&impl_block.target, comment_inserter));
 
         if !impl_block.where_clauses.is_empty() {
+            todo!()
+        }
+        if !impl_block.assoc_types.is_empty() {
             todo!()
         }
 
@@ -624,6 +747,9 @@ impl<'code> DocumentBuilder<'code> {
             ast::Statement::Label(loc) => todo!(),
             ast::Statement::Declaration(vec) => todo!(),
             ast::Statement::Binding(binding) => {
+                if !binding.attrs.0.is_empty() {
+                    todo!()
+                }
                 let mut list = vec![
                     self.text("let "),
                     self.build_pattern(&binding.pattern, comment_inserter),
@@ -699,9 +825,10 @@ impl<'code> DocumentBuilder<'code> {
                 self.build_expression(value, comment_inserter),
             ],
             ast::Statement::Assert(loc) => todo!(),
-            ast::Statement::Expression(loc) => todo!(),
+            ast::Statement::Expression(_, _) => todo!(),
+            ast::Statement::Type(_) => todo!(),
         };
-        list.push(self.token(lexer::TokenKind::Semi));
+        list.push(self.token(token::TokenKind::Semi));
 
         let end_of_statement_comments = self.pull_comments(
             comment_inserter,
@@ -731,36 +858,39 @@ impl<'code> DocumentBuilder<'code> {
             ast::Expression::BoolLiteral(bool_literal) => {
                 self.text(bool_literal.to_string())
             }
-            ast::Expression::BitLiteral(bit_literal) => {
+            ast::Expression::TriLiteral(bit_literal) => {
                 self.text(match **bit_literal {
                     ast::BitLiteral::Low => "LOW",
                     ast::BitLiteral::High => "HIGH",
-                    ast::BitLiteral::HighImp => "UNDEF",
+                    ast::BitLiteral::HighImp => "HIGHIMP",
                 })
             }
-            ast::Expression::ArrayLiteral(array_literal) => self.group(
-                lexer::TokenKind::OpenBracket.as_str(),
-                array_literal,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseBracket.as_str(),
+            ast::Expression::ArrayLiteral(elements) => self.group(
+                token::TokenKind::OpenBracket.as_str(),
+                elements,
+                token::TokenKind::Comma,
+                token::TokenKind::CloseBracket.as_str(),
                 comment_inserter,
             ),
             ast::Expression::ArrayShorthandLiteral(loc, loc1) => todo!(),
             ast::Expression::Index(loc, loc1) => todo!(),
             ast::Expression::RangeIndex { target, start, end } => todo!(),
             ast::Expression::TupleLiteral(items) => self.group(
-                lexer::TokenKind::OpenParen.as_str(),
+                token::TokenKind::OpenParen.as_str(),
                 items,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
-            ast::Expression::TupleIndex(loc, loc1) => todo!(),
+            ast::Expression::TupleIndex { .. } => todo!(),
             ast::Expression::FieldAccess(parent, field) => self.list([
                 self.build_expression(parent, comment_inserter),
                 self.text(format!(".{field}")),
             ]),
-            ast::Expression::CreatePorts => todo!(),
+            ast::Expression::TypeCast(_, _) => todo!(),
+            ast::Expression::LabelAccess { .. } => todo!(),
+            ast::Expression::MacroCall { .. } => todo!(),
+            ast::Expression::Incomplete(_, _) => todo!(),
             ast::Expression::Call {
                 kind,
                 callee,
@@ -796,7 +926,7 @@ impl<'code> DocumentBuilder<'code> {
             } => {
                 let mut list = vec![
                     self.build_expression(target, comment_inserter),
-                    self.token(lexer::TokenKind::Dot),
+                    self.token(token::TokenKind::Dot),
                 ];
                 list.extend(match kind {
                     ast::CallKind::Function => vec![],
@@ -818,16 +948,28 @@ impl<'code> DocumentBuilder<'code> {
 
                 self.list(list)
             }
-            ast::Expression::If(condition, true_branch, false_branch) => self
-                .list([
-                    self.text("if "),
-                    self.build_expression(condition, comment_inserter),
-                    self.text(" "),
-                    self.build_expression(true_branch, comment_inserter),
-                    self.text(" else "),
-                    self.build_expression(false_branch, comment_inserter),
-                ]),
-            ast::Expression::Match(against, arms) => {
+            ast::Expression::If {
+                cond,
+                on_true,
+                on_false,
+            } => self.list([
+                self.text("if "),
+                self.build_expression(cond, comment_inserter),
+                self.text(" "),
+                self.build_expression(on_true, comment_inserter),
+                self.text(" else "),
+                self.build_expression(on_false, comment_inserter),
+            ]),
+            ast::Expression::Match {
+                expression: against,
+                branches: arms,
+                if_let,
+            } => {
+                // `if let` parses to a `Match`; printing it as `match`
+                // would rewrite the construct.
+                if *if_let {
+                    todo!()
+                }
                 let mut list = vec![
                     self.text("match "),
                     self.build_expression(against, comment_inserter),
@@ -835,14 +977,21 @@ impl<'code> DocumentBuilder<'code> {
                 if !arms.is_empty() {
                     let mut arm_list = vec![];
                     for arm in &arms.inner {
-                        let pattern =
-                            self.build_pattern(&arm.0, comment_inserter);
+                        let mut pattern_list =
+                            vec![self.build_pattern(&arm.0, comment_inserter)];
+                        if let Some(guard) = &arm.1 {
+                            pattern_list.extend([
+                                self.text(" if "),
+                                self.build_expression(guard, comment_inserter),
+                            ]);
+                        }
+                        let pattern = self.list(pattern_list);
                         let case = self.list([
                             self.text(format!(
                                 " {} ",
-                                lexer::TokenKind::FatArrow.as_str()
+                                token::TokenKind::FatArrow.as_str()
                             )),
-                            self.build_expression(&arm.1, comment_inserter),
+                            self.build_expression(&arm.2, comment_inserter),
                         ]);
                         arm_list.push(
                             self.try_catch(
@@ -861,7 +1010,7 @@ impl<'code> DocumentBuilder<'code> {
 
                     let arms_doc = self.group_raw(
                         &arm_list,
-                        lexer::TokenKind::Comma,
+                        token::TokenKind::Comma,
                         comment_inserter,
                     );
                     list.extend([
@@ -876,23 +1025,25 @@ impl<'code> DocumentBuilder<'code> {
                         ),
                         self.text("}"),
                     ]);
+                } else {
+                    list.push(self.text(" {}"));
                 }
                 self.list(list)
             }
             // TODO: proper parenthesization in both of these
             ast::Expression::UnaryOperator(unary_operator, inner) => {
                 self.list([
-                    self.text(unary_operator.to_string()),
+                    self.text(unary_operator_str(unary_operator)),
                     self.build_expression(inner, comment_inserter),
                 ])
             }
             ast::Expression::BinaryOperator(left, op, right) => self.list([
                 self.build_expression(left, comment_inserter),
-                self.text(format!(" {op} ")),
+                self.text(format!(" {} ", binary_operator_str(op))),
                 self.build_expression(right, comment_inserter),
             ]),
             ast::Expression::Block(block) => {
-                let mut list = vec![self.token(lexer::TokenKind::OpenBrace)];
+                let mut list = vec![self.token(token::TokenKind::OpenBrace)];
                 if block.statements.len()
                     + block.result.as_ref().map_or(0, |_| 1)
                     > 0
@@ -954,7 +1105,7 @@ impl<'code> DocumentBuilder<'code> {
 
                     list.push(self.nest(self.trim_list(nest), self.indent));
                 }
-                list.push(self.token(lexer::TokenKind::CloseBrace));
+                list.push(self.token(token::TokenKind::CloseBrace));
 
                 self.list(list)
             }
@@ -963,14 +1114,14 @@ impl<'code> DocumentBuilder<'code> {
                 stage,
                 name,
             } => todo!(),
-            ast::Expression::TypeLevelIf(loc, loc1, loc2) => todo!(),
+            ast::Expression::TypeLevelIf { .. } => todo!(),
             ast::Expression::StageValid => todo!(),
             ast::Expression::StageReady => todo!(),
             ast::Expression::StrLiteral(loc) => todo!(),
             ast::Expression::Parenthesized(inner) => self.list([
-                self.token(lexer::TokenKind::OpenParen),
+                self.token(token::TokenKind::OpenParen),
                 self.build_expression(inner, comment_inserter),
-                self.token(lexer::TokenKind::CloseParen),
+                self.token(token::TokenKind::CloseParen),
             ]),
             ast::Expression::Lambda {
                 unit_kind,
@@ -990,12 +1141,12 @@ impl<'code> DocumentBuilder<'code> {
         match &**turbofish {
             ast::TurbofishInner::Named(vec) => todo!(),
             ast::TurbofishInner::Positional(arguments) => self.list([
-                self.token(lexer::TokenKind::PathSeparator),
+                self.token(token::TokenKind::PathSeparator),
                 self.group(
-                    lexer::TokenKind::Lt.as_str(),
+                    token::TokenKind::Lt.as_str(),
                     arguments,
-                    lexer::TokenKind::Comma,
-                    lexer::TokenKind::Gt.as_str(),
+                    token::TokenKind::Comma,
+                    token::TokenKind::Gt.as_str(),
                     comment_inserter,
                 ),
             ]),
@@ -1009,17 +1160,17 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match &**argument_list {
             ast::ArgumentList::Positional(arguments) => self.group(
-                lexer::TokenKind::OpenParen.as_str(),
+                token::TokenKind::OpenParen.as_str(),
                 arguments,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
             ast::ArgumentList::Named(named_arguments) => self.group(
                 "$(",
                 named_arguments,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
         }
@@ -1051,12 +1202,23 @@ impl<'code> DocumentBuilder<'code> {
             ast::Pattern::Bool(bool_literal) => {
                 self.text(bool_literal.to_string())
             }
-            ast::Pattern::Path(path) => self.build_path(path),
+            ast::Pattern::Bound(name, inner) => self.list([
+                self.text(format!("{name} @ ")),
+                self.build_pattern(inner, comment_inserter),
+            ]),
+            ast::Pattern::Path { wire, path } => {
+                let mut list = vec![];
+                if wire.is_some() {
+                    list.push(self.text("wire "));
+                }
+                list.push(self.build_path(path));
+                self.list(list)
+            }
             ast::Pattern::Tuple(tuple) => self.group(
-                lexer::TokenKind::OpenParen.as_str(),
+                token::TokenKind::OpenParen.as_str(),
                 tuple,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
             ast::Pattern::Array(vec) => todo!(),
@@ -1075,10 +1237,10 @@ impl<'code> DocumentBuilder<'code> {
         match &**argument_pattern {
             ast::ArgumentPattern::Named(vec) => todo!(),
             ast::ArgumentPattern::Positional(tuple) => self.group(
-                lexer::TokenKind::OpenParen.as_str(),
+                token::TokenKind::OpenParen.as_str(),
                 tuple,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
         }
@@ -1093,10 +1255,14 @@ impl<'code> DocumentBuilder<'code> {
             ast::TypeExpression::TypeSpec(type_spec) => {
                 self.build_type_spec(type_spec, comment_inserter)
             }
+            ast::TypeExpression::Bool(value) => self.text(value.to_string()),
             ast::TypeExpression::Integer(value) => self.text(value.to_string()),
-            ast::TypeExpression::ConstGeneric(expression) => {
-                self.build_expression(expression, comment_inserter)
-            }
+            // Const generics are always brace-delimited in type position.
+            ast::TypeExpression::ConstGeneric(expression) => self.list([
+                self.text("{"),
+                self.build_expression(expression, comment_inserter),
+                self.text("}"),
+            ]),
             ast::TypeExpression::String(string) => todo!(),
         }
     }
@@ -1108,28 +1274,28 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match &**type_spec {
             ast::TypeSpec::Tuple(elements) => self.group(
-                lexer::TokenKind::OpenParen.as_str(),
+                token::TokenKind::OpenParen.as_str(),
                 elements,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::CloseParen.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
             ast::TypeSpec::Array { inner, size } => self.list([
-                self.token(lexer::TokenKind::OpenBracket),
+                self.token(token::TokenKind::OpenBracket),
                 self.build_type_expression(inner, comment_inserter),
-                self.token(lexer::TokenKind::Semi),
+                self.token(token::TokenKind::Semi),
                 self.text(" "),
                 self.build_type_expression(size, comment_inserter),
-                self.token(lexer::TokenKind::CloseBracket),
+                self.token(token::TokenKind::CloseBracket),
             ]),
             ast::TypeSpec::Named(path, type_params) => {
                 let mut list = vec![self.build_path(path)];
                 if let Some(params) = type_params {
                     list.push(self.group(
-                        lexer::TokenKind::Lt.as_str(),
+                        token::TokenKind::Lt.as_str(),
                         &params.inner,
-                        lexer::TokenKind::Comma,
-                        lexer::TokenKind::Gt.as_str(),
+                        token::TokenKind::Comma,
+                        token::TokenKind::Gt.as_str(),
                         comment_inserter,
                     ));
                 }
@@ -1139,10 +1305,11 @@ impl<'code> DocumentBuilder<'code> {
                 self.text("inv "),
                 self.build_type_expression(inner, comment_inserter),
             ]),
-            ast::TypeSpec::Wire(inner) => self.list([
+            ast::TypeSpec::CopyView(inner) => self.list([
                 self.text("&"),
                 self.build_type_expression(inner, comment_inserter),
             ]),
+            ast::TypeSpec::Impl(_) => todo!(),
             ast::TypeSpec::Wildcard => self.text("_"),
         }
     }
@@ -1153,7 +1320,11 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         match &**type_param {
-            ast::TypeParam::TypeName { name, traits } => {
+            ast::TypeParam::TypeName {
+                name,
+                traits,
+                default,
+            } => {
                 let mut list = vec![self.text(name.to_string())];
                 if !traits.is_empty() {
                     let mut flatten_list = vec![];
@@ -1162,13 +1333,13 @@ impl<'code> DocumentBuilder<'code> {
                         if i > 0 {
                             flatten_list.push(self.text(format!(
                                 " {} ",
-                                lexer::TokenKind::Plus.as_str()
+                                token::TokenKind::Plus.as_str()
                             )));
                             nest_list.extend([
                                 self.newline(),
                                 self.text(format!(
                                     "{} ",
-                                    lexer::TokenKind::Plus.as_str()
+                                    token::TokenKind::Plus.as_str()
                                 )),
                             ])
                         }
@@ -1187,10 +1358,27 @@ impl<'code> DocumentBuilder<'code> {
                         ),
                     ])
                 }
+                if let Some(default) = default {
+                    list.extend([
+                        self.text(" = "),
+                        self.build_type_expression(default, comment_inserter),
+                    ]);
+                }
                 self.list(list)
             }
-            ast::TypeParam::TypeWithMeta { meta, name } => {
-                self.text(format!("#{meta} {name}"))
+            ast::TypeParam::TypeWithMeta {
+                meta,
+                name,
+                default,
+            } => {
+                let mut list = vec![self.text(format!("#{meta} {name}"))];
+                if let Some(default) = default {
+                    list.extend([
+                        self.text(" = "),
+                        self.build_type_expression(default, comment_inserter),
+                    ]);
+                }
+                self.list(list)
             }
         }
     }
@@ -1200,13 +1388,18 @@ impl<'code> DocumentBuilder<'code> {
         trait_spec: &Loc<ast::TraitSpec>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        // `Fn(T) -> O` sugar arrives desugared; reprinting it as
+        // `Fn<(T), O>` would rewrite the source.
+        if trait_spec.paren_syntax {
+            todo!()
+        }
         let mut list = vec![self.build_path(&trait_spec.path)];
         if let Some(type_params) = &trait_spec.type_params {
             list.push(self.group(
-                lexer::TokenKind::Lt.as_str(),
+                token::TokenKind::Lt.as_str(),
                 &type_params.inner,
-                lexer::TokenKind::Comma,
-                lexer::TokenKind::Gt.as_str(),
+                token::TokenKind::Comma,
+                token::TokenKind::Gt.as_str(),
                 comment_inserter,
             ));
         }
@@ -1224,17 +1417,16 @@ impl<'code> DocumentBuilder<'code> {
                 if *all { "(all)" } else { "" }
             )),
             ast::Attribute::Fsm { state } => todo!(),
-            ast::Attribute::WalTraceable {
-                suffix,
-                uses_clk,
-                uses_rst,
-            } => todo!(),
-            ast::Attribute::WalTrace { clk, rst } => todo!(),
-            ast::Attribute::WalSuffix { suffix } => todo!(),
             ast::Attribute::Documentation { content } => {
                 self.text(format!("///{content}"))
             }
             ast::Attribute::SurferTranslator(string) => todo!(),
+            ast::Attribute::SpadecParenSugar => {
+                self.text("#[spadec_paren_sugar]")
+            }
+            ast::Attribute::Inline => self.text("#[inline]"),
+            ast::Attribute::Deprecated { .. } => todo!(),
+            ast::Attribute::VerilogAttrs { .. } => todo!(),
         }
     }
 
@@ -1243,6 +1435,15 @@ impl<'code> DocumentBuilder<'code> {
         attribute_list: &ast::AttributeList,
         always_newline: bool,
     ) -> DocumentIdx {
+        // A `///` doc renders as a line comment; in inline or flattenable
+        // positions everything after it on the line would be swallowed.
+        if !always_newline
+            && attribute_list.0.iter().any(|attribute| {
+                matches!(**attribute, ast::Attribute::Documentation { .. })
+            })
+        {
+            todo!()
+        }
         self.list(match attribute_list.0.len() {
             0 => vec![],
             1 => vec![
@@ -1271,11 +1472,46 @@ impl<'code> DocumentBuilder<'code> {
         parameter: &AstParameter,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        self.list([
-            self.build_attribute_list(&parameter.0, false),
-            self.text(format!("{}: ", parameter.1)),
-            self.build_type_spec(&parameter.2, comment_inserter),
-        ])
+        let mut list = vec![self.build_attribute_list(&parameter.0, false)];
+        if parameter.1.is_some() {
+            list.push(self.text("wire "));
+        }
+        list.extend([
+            self.text(format!("{}: ", parameter.2)),
+            self.build_type_spec(&parameter.3, comment_inserter),
+        ]);
+        self.list(list)
+    }
+
+    pub fn build_array_element(
+        &self,
+        element: &AstArrayElement,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let mut list = vec![];
+        if let Some(label) = &element.0 {
+            list.push(self.text(format!("'{label} ")));
+        }
+        list.push(self.build_expression(&element.1, comment_inserter));
+        self.list(list)
+    }
+
+    /// The rendered `pub` prefix (trailing space included), or [`None`] for
+    /// implicit visibility.
+    fn visibility_prefix(
+        &self,
+        visibility: &Loc<Visibility>,
+    ) -> Option<DocumentIdx> {
+        let keyword = match visibility.inner {
+            Visibility::Implicit => return None,
+            Visibility::Public => "pub ",
+            Visibility::AtLib => "pub(lib) ",
+            Visibility::AtSelf => "pub(self) ",
+            Visibility::AtSuper => "pub(super) ",
+            // Not producible by the parser.
+            Visibility::AtSuperSuper => todo!(),
+        };
+        Some(self.text(keyword))
     }
 
     /// Returns a (try, catch) pair of documents for formatting the given
@@ -1287,17 +1523,29 @@ impl<'code> DocumentBuilder<'code> {
     ) -> (DocumentIdx, DocumentIdx) {
         let mut try_list = vec![];
         let mut catch_list = vec![];
-        if parameter_list.self_.is_some() {
+        if let Some((attributes, wire, amp)) = &parameter_list.self_ {
+            let self_doc = |trailing: &str| {
+                let mut list =
+                    vec![self.build_attribute_list(attributes, false)];
+                if wire.is_some() {
+                    list.push(self.text("wire "));
+                }
+                if amp.is_some() {
+                    list.push(self.text("&"));
+                }
+                list.push(self.text(format!("self{trailing}")));
+                self.list(list)
+            };
             let continues = !parameter_list.args.is_empty();
-            try_list.push(self.text(if continues { "self, " } else { "self" }));
+            try_list.push(self_doc(if continues { ", " } else { "" }));
             catch_list.extend([
                 self.newline(),
-                self.nest(self.text("self,"), self.indent),
+                self.nest(self_doc(","), self.indent),
             ]);
         }
         let (try_idx, catch_idx) = self.group_raw(
             &parameter_list.args,
-            lexer::TokenKind::Comma,
+            token::TokenKind::Comma,
             comment_inserter,
         );
         try_list.push(try_idx);
@@ -1317,7 +1565,7 @@ impl<'code> DocumentBuilder<'code> {
         self.inner.borrow_mut().add(Document::Raw(raw_text.into()))
     }
 
-    fn token(&self, text: lexer::TokenKind) -> DocumentIdx {
+    fn token(&self, text: token::TokenKind) -> DocumentIdx {
         self.text(text.as_str())
     }
 
@@ -1369,7 +1617,7 @@ impl<'code> DocumentBuilder<'code> {
     fn group_raw<'a, B: BuildAsDocument + HasLineNumber + 'a>(
         &self,
         contents: impl IntoIterator<Item = &'a B>,
-        between: impl Into<Option<lexer::TokenKind>>,
+        between: impl Into<Option<token::TokenKind>>,
         comment_inserter: &mut CommentInserter,
     ) -> (DocumentIdx, DocumentIdx) {
         let between = between.into();
@@ -1401,10 +1649,10 @@ impl<'code> DocumentBuilder<'code> {
         let doc_contents = self.list(list);
         let mut nest_list =
             vec![self.newline(), self.nest(doc_contents, self.indent)];
-        if matches!(between, Some(lexer::TokenKind::Comma)) {
+        if matches!(between, Some(token::TokenKind::Comma)) {
             // always trailing comma when nesting a comma group, could
             // overestimate
-            nest_list.push(self.token(lexer::TokenKind::Comma));
+            nest_list.push(self.token(token::TokenKind::Comma));
         }
         nest_list.push(self.newline());
         // try to flatten, otherwise nest
@@ -1415,7 +1663,7 @@ impl<'code> DocumentBuilder<'code> {
         &self,
         open: impl Into<String>,
         contents: impl IntoIterator<Item = &'a B>,
-        between: impl Into<Option<lexer::TokenKind>>,
+        between: impl Into<Option<token::TokenKind>>,
         close: impl Into<String>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {

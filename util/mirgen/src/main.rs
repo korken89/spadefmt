@@ -42,6 +42,13 @@ struct Opts {
 
 #[snafu::report]
 fn main() -> Result<(), Whatever> {
+    // Monomorphisation IDs are allocated inside rayon tasks; single-thread
+    // the pool so repeated runs produce identical, diffable MIR.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_global()
+        .whatever_context("Failed to configure the rayon thread pool")?;
+
     let cli_opts: Opts = argh::from_env();
 
     let filename = cli_opts.file.to_string_lossy().to_string();
@@ -58,10 +65,13 @@ fn main() -> Result<(), Whatever> {
     };
 
     let source = (
+        // Root namespace: a named one would require a matching `mod`
+        // declaration and compiles to no MIR.
         ModuleNamespace {
-            namespace: Path::from_strs(&["mirgen"]),
-            base_namespace: Path::from_strs(&["mirgen"]),
+            namespace: Path(vec![]),
+            base_namespace: Path(vec![]),
             file: filename.clone(),
+            working_dir: None,
         },
         filename,
         code,
@@ -74,15 +84,15 @@ fn main() -> Result<(), Whatever> {
         verilator_wrapper_output: None,
         state_dump_file: None,
         item_list_file: None,
-        print_type_traceback: false,
-        print_parse_traceback: false,
+        print_parse_traceback: None,
         opt_passes: vec![],
     };
 
     let Ok(Artefacts {
-        flat_mir_entities, ..
+        bumpy_mir_entities, ..
     }) = spade::compile(
         vec![source],
+        spade::CompilationGoal::Codegen,
         cli_opts.use_stdlib,
         opts,
         diagnostic_handler,
@@ -94,8 +104,8 @@ fn main() -> Result<(), Whatever> {
         whatever!("Failed to compile Spade code");
     };
 
-    for flat_mir_entity in flat_mir_entities {
-        println!("{}", flat_mir_entity.0);
+    for mir_entity in bumpy_mir_entities.into_iter().flatten() {
+        println!("{mir_entity}");
     }
 
     Ok(())

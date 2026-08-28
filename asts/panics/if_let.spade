@@ -1,0 +1,3 @@
+fn f(x: Option<bool>) -> bool {
+    if let Some(y) = x { y } else { false }
+}

@@ -2,7 +2,7 @@ use std::ports::new_mut_wire;
 use std::ports::read_mut_wire;
 use std::mem::fifo;
 
-struct port Rv<T> {
+struct Rv<T> {
     data: &Option<T>,
     ready: inv &bool
 }

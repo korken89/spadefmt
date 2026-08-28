@@ -1,0 +1,3 @@
+fn apply<F: Fn(bool) -> bool>(f: F, x: bool) -> bool {
+    f(x)
+}

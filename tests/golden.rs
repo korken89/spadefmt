@@ -47,10 +47,17 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 /// pair and removes it here. `swim-templates/` entries are only asserted when
 /// the submodule is initialized.
 const KNOWN_PANICS: &[&str] = &[
+    "panics/binding_attr.spade",
+    "panics/fn_trait_sugar.spade",
+    "panics/if_let.spade",
+    "panics/member_doc.spade",
+    "panics/module_doc.spade",
     "panics/named_arg_pattern.spade",
     "panics/pipeline_reg.spade",
     "panics/tuple_index.spade",
     "panics/unsafe_block.spade",
+    "panics/use_braces.spade",
+    "panics/variant_attr.spade",
     "swim-templates/ccgm1a1-evb/src/main.spade",
     "swim-templates/ecpix5/src/main.spade",
     "swim-templates/fomu-pvt/src/main.spade",

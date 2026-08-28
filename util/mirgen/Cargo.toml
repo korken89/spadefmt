@@ -13,6 +13,7 @@ readme.workspace = true
 camino.workspace = true
 snafu.workspace = true
 argh.workspace = true
+rayon.workspace = true
 
 spade-lang.workspace = true
 spade-diagnostics.workspace = true
