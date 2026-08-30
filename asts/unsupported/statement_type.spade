@@ -1,4 +1,0 @@
-fn f() -> bool {
-    type T = bool;
-    true
-}

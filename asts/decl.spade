@@ -1,0 +1,7 @@
+entity e(p: inv &bool) -> bool {
+    decl x, y;
+    set p = &x;
+    let x = true;
+    let y = x;
+    y
+}

@@ -1,0 +1,7 @@
+pipeline(2) p(clk: clock, x: bool) -> bool {
+    'first
+    reg;
+    'second
+    reg;
+    x
+}

@@ -1,0 +1,11 @@
+fn f() -> bool {
+    enum State {
+        Idle,
+        Busy,
+    }
+    struct Pair {
+        first: bool,
+        second: bool,
+    }
+    true
+}

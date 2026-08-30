@@ -806,13 +806,21 @@ impl<'code> DocumentBuilder<'code> {
         statement: &Loc<ast::Statement>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        let mut list = match &**statement {
-            ast::Statement::Label(_) => {
-                vec![self.unsupported(statement, "stage labels (`'label`)")]
+        let (mut list, wants_semi) = match &**statement {
+            ast::Statement::Label(name) => {
+                (vec![self.text(format!("'{name}"))], false)
             }
-            ast::Statement::Declaration(_) => {
-                vec![self.unsupported(statement, "`decl` statements")]
-            }
+            ast::Statement::Declaration(names) => (
+                vec![self.text(format!(
+                    "decl {}",
+                    names
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))],
+                true,
+            ),
             ast::Statement::Binding(binding) => {
                 if let Some(attribute) = binding.attrs.0.first() {
                     self.record_unsupported(
@@ -837,18 +845,31 @@ impl<'code> DocumentBuilder<'code> {
                     self.build_expression(&binding.value, comment_inserter),
                 );
 
-                list
+                (list, true)
             }
-            ast::Statement::PipelineRegMarker(_, _) => {
-                vec![
-                    self.unsupported(
-                        statement,
-                        "pipeline stage markers (`reg`)",
-                    ),
-                ]
+            ast::Statement::PipelineRegMarker(count, condition) => {
+                let mut list = vec![self.text("reg")];
+
+                if let Some(condition) = condition {
+                    list.extend([
+                        self.token(token::TokenKind::OpenBracket),
+                        self.build_expression(condition, comment_inserter),
+                        self.token(token::TokenKind::CloseBracket),
+                    ]);
+                }
+
+                if let Some(count) = count {
+                    list.extend([
+                        self.text(" * "),
+                        self.build_type_expression(count, comment_inserter),
+                    ]);
+                }
+
+                (list, true)
             }
             ast::Statement::Register(register) => {
                 let mut list = vec![
+                    self.build_attribute_list(&register.attributes, true),
                     self.text("reg("),
                     self.build_expression(&register.clock, comment_inserter),
                     self.text(") "),
@@ -860,13 +881,6 @@ impl<'code> DocumentBuilder<'code> {
                         self.text(": "),
                         self.build_type_spec(value_type, comment_inserter),
                     ]);
-                }
-
-                if let Some(attribute) = register.attributes.0.first() {
-                    self.record_unsupported(
-                        attribute,
-                        "attributes on `reg` statements",
-                    );
                 }
 
                 list.push(self.text(" "));
@@ -894,30 +908,43 @@ impl<'code> DocumentBuilder<'code> {
                     self.build_expression(&register.value, comment_inserter),
                 ]);
 
-                list
+                (list, true)
             }
-            ast::Statement::Set { target, value } => vec![
-                self.text("set "),
-                self.build_expression(target, comment_inserter),
-                self.text(" = "),
-                self.build_expression(value, comment_inserter),
-            ],
-            ast::Statement::Assert(_) => {
-                vec![self.unsupported(statement, "`assert` statements")]
-            }
-            ast::Statement::Expression(_, _) => {
-                vec![self.unsupported(statement, "expression statements")]
-            }
-            ast::Statement::Type(_) => {
+            ast::Statement::Set { target, value } => (
                 vec![
-                    self.unsupported(
-                        statement,
-                        "type declarations in unit bodies",
-                    ),
-                ]
-            }
+                    self.text("set "),
+                    self.build_expression(target, comment_inserter),
+                    self.text(" = "),
+                    self.build_expression(value, comment_inserter),
+                ],
+                true,
+            ),
+            ast::Statement::Assert(expression) => (
+                vec![
+                    self.text("assert "),
+                    self.build_expression(expression, comment_inserter),
+                ],
+                true,
+            ),
+            ast::Statement::Expression(expression, attributes) => (
+                vec![
+                    self.build_attribute_list(attributes, true),
+                    self.build_expression(expression, comment_inserter),
+                ],
+                true,
+            ),
+            // Enum and struct take no semicolon; an alias owns its own.
+            ast::Statement::Type(type_declaration) => (
+                vec![self.build_type_declaration(
+                    type_declaration,
+                    comment_inserter,
+                )],
+                false,
+            ),
         };
-        list.push(self.token(token::TokenKind::Semi));
+        if wants_semi {
+            list.push(self.token(token::TokenKind::Semi));
+        }
 
         let end_of_statement_comments = self.pull_comments(
             comment_inserter,

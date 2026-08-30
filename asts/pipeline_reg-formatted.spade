@@ -1,0 +1,7 @@
+pipeline(6) p(clk: clock, cond: bool) -> bool {
+    reg;
+    reg * 2;
+    reg[cond];
+    reg[cond] * 2;
+    true
+}

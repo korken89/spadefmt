@@ -54,10 +54,8 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/array_pattern.spade",
     "unsupported/array_shorthand.spade",
-    "unsupported/assert.spade",
     "unsupported/assoc_type.spade",
     "unsupported/binding_attr.spade",
-    "unsupported/decl.spade",
     "unsupported/deprecated_attr.spade",
     "unsupported/external_mod.spade",
     "unsupported/fn_trait_sugar.spade",
@@ -68,7 +66,6 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/impl_where.spade",
     "unsupported/incomplete_expr.spade",
     "unsupported/index.spade",
-    "unsupported/label.spade",
     "unsupported/label_access.spade",
     "unsupported/lambda.spade",
     "unsupported/macro_call.spade",
@@ -79,14 +76,10 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/multiple.spade",
     "unsupported/named_arg_pattern.spade",
     "unsupported/optimize_attr.spade",
-    "unsupported/pipeline_reg.spade",
     "unsupported/range_index.spade",
-    "unsupported/register_attr.spade",
     "unsupported/stage_ready.spade",
     "unsupported/stage_ref.spade",
     "unsupported/stage_valid.spade",
-    "unsupported/statement_expr.spade",
-    "unsupported/statement_type.spade",
     "unsupported/str_literal.spade",
     "unsupported/surfer_translator_attr.spade",
     "unsupported/trait_def.spade",
@@ -104,7 +97,6 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "swim-templates/ecpix5/src/main.spade",
     "swim-templates/fomu-pvt/src/main.spade",
     "swim-templates/go-board/src/main.spade",
-    "swim-templates/icebreaker/src/main.spade",
     "swim-templates/tangnano20k/src/main.spade",
     "swim-templates/tangnano4k/src/main.spade",
     "swim-templates/tangnano9k/src/main.spade",
@@ -500,7 +492,7 @@ fn unsupported_diagnostics_are_collected() {
                 constructs"
         )
     };
-    for expected in ["`assert` statements", "index expressions"] {
+    for expected in ["type casts", "index expressions"] {
         assert!(
             diagnostics.contains(expected),
             "diagnostics do not mention {expected}:\n{diagnostics}"
