@@ -1,0 +1,4 @@
+fn f(x: [int<8>; 4]) -> int<8> {
+    assert true;
+    x[0]
+}

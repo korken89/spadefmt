@@ -1,0 +1,3 @@
+impl Foo for bool {
+    type T = bool;
+}

@@ -1,0 +1,4 @@
+fn f() -> bool {
+    decl x;
+    true
+}

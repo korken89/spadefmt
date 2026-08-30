@@ -1,0 +1,5 @@
+entity e(clk: clock) -> bool {
+    #[no_mangle]
+    reg(clk) x = true;
+    x
+}

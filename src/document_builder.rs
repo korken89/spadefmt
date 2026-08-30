@@ -17,10 +17,10 @@ use spade_ast as ast;
 use spade_ast::token;
 use spade_codespan_reporting::files::{Files, SimpleFile};
 use spade_common::{
-    location_info::{Loc, WithLocation},
+    location_info::{FullSpan, Loc, WithLocation},
     name::{Identifier, Path, Visibility},
 };
-use spade_diagnostics::codespan::Span;
+use spade_diagnostics::{Diagnostic, codespan::Span};
 
 use crate::{
     comment_insertion::CommentInserter,
@@ -30,6 +30,7 @@ use crate::{
 pub struct DocumentBuilder<'code> {
     indent: isize,
     file: RefCell<Option<&'code SimpleFile<String, String>>>,
+    diagnostics: RefCell<Vec<Diagnostic>>,
     inner: RefCell<InternedDocumentStore>,
 }
 
@@ -239,6 +240,13 @@ fn unary_operator_str(op: &ast::UnaryOperator) -> &'static str {
     }
 }
 
+fn where_clause_target(clause: &ast::WhereClause) -> &Loc<Path> {
+    match clause {
+        ast::WhereClause::GenericInt { target, .. }
+        | ast::WhereClause::TraitBounds { target, .. } => target,
+    }
+}
+
 fn span_of_item(item: &ast::Item) -> Span {
     match item {
         spade_ast::Item::Unit(unit) => unit.span,
@@ -257,8 +265,32 @@ impl<'code> DocumentBuilder<'code> {
         Self {
             indent,
             file: Default::default(),
+            diagnostics: Default::default(),
             inner: Default::default(),
         }
+    }
+
+    /// Records an "unsupported construct" diagnostic. The built document is
+    /// discarded whenever any of these exist, so builders may continue with
+    /// placeholder output afterwards.
+    fn record_unsupported(&self, span: impl Into<FullSpan>, construct: &str) {
+        self.diagnostics.borrow_mut().push(
+            Diagnostic::error(
+                span,
+                format!("spadefmt cannot format {construct} yet"),
+            )
+            .primary_label("unsupported construct"),
+        );
+    }
+
+    /// [`Self::record_unsupported`] for expression position.
+    fn unsupported(
+        &self,
+        span: impl Into<FullSpan>,
+        construct: &str,
+    ) -> DocumentIdx {
+        self.record_unsupported(span, construct);
+        self.text("")
     }
 
     /// Pull comments from `comment_inserter` **exclusively** till
@@ -306,16 +338,19 @@ impl<'code> DocumentBuilder<'code> {
 
     pub fn build_root(
         self,
-        root: &ast::ModuleBody,
+        root: &Loc<ast::ModuleBody>,
         file: &'code SimpleFile<String, String>,
         comment_inserter: &mut CommentInserter,
-    ) -> (InternedDocumentStore, DocumentIdx) {
+    ) -> (InternedDocumentStore, DocumentIdx, Vec<Diagnostic>) {
         self.file.replace(Some(file));
 
         // `//!` docs are tokens, not comments, so the comment inserter
-        // never sees them.
+        // never sees them. They carry no spans; anchor at the file start.
         if !root.documentation.is_empty() {
-            todo!()
+            self.record_unsupported(
+                (Span::new(0, 0), root.file_id),
+                "module documentation (`//!` comments)",
+            );
         }
 
         let mut list = vec![];
@@ -352,7 +387,7 @@ impl<'code> DocumentBuilder<'code> {
         ));
 
         let idx = self.trim_list(list);
-        (self.inner.take(), idx)
+        (self.inner.take(), idx, self.diagnostics.take())
     }
 
     pub fn build_item(
@@ -362,12 +397,18 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match item {
             ast::Item::Unit(unit) => self.build_unit(unit, comment_inserter),
-            ast::Item::MacroDef(_) => todo!(),
-            ast::Item::TraitDef(_) => todo!(),
+            ast::Item::MacroDef(macro_def) => {
+                self.unsupported(macro_def, "macro definitions")
+            }
+            ast::Item::TraitDef(trait_definition) => {
+                self.unsupported(trait_definition, "trait definitions")
+            }
             ast::Item::Type(type_declaration) => {
                 self.build_type_declaration(type_declaration, comment_inserter)
             }
-            ast::Item::ExternalMod(_) => todo!(),
+            ast::Item::ExternalMod(external_module) => {
+                self.unsupported(external_module, "external modules")
+            }
             ast::Item::Module(module) => {
                 self.build_module(module, comment_inserter)
             }
@@ -460,8 +501,11 @@ impl<'code> DocumentBuilder<'code> {
             ),
         ));
 
-        if !unit.head.where_clauses.is_empty() {
-            todo!()
+        if let Some(clause) = unit.head.where_clauses.first() {
+            self.record_unsupported(
+                where_clause_target(clause),
+                "`where` clauses",
+            );
         }
 
         list.push(match &unit.body {
@@ -551,7 +595,9 @@ impl<'code> DocumentBuilder<'code> {
                 ]);
                 self.list(list)
             }
-            ast::TypeDeclKind::Alias(_) => todo!(),
+            ast::TypeDeclKind::Alias(_) => {
+                self.unsupported(type_declaration, "type aliases")
+            }
         }
     }
 
@@ -562,8 +608,11 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         // Variants render inside flattenable groups, where attribute and
         // doc lines cannot be emitted safely yet.
-        if !variant.attributes.0.is_empty() {
-            todo!()
+        if let Some(attribute) = variant.attributes.0.first() {
+            self.record_unsupported(
+                attribute,
+                "attributes or documentation on enum variants",
+            );
         }
         let mut list = vec![self.text(variant.name.to_string())];
         if let Some(parameter_list) = &variant.args {
@@ -610,8 +659,15 @@ impl<'code> DocumentBuilder<'code> {
         body: &Loc<ast::ModuleBody>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        // The doc strings carry no spans; anchor at the body start.
         if !body.documentation.is_empty() {
-            todo!()
+            self.record_unsupported(
+                (
+                    Span::new(body.span.start(), body.span.start()),
+                    body.file_id,
+                ),
+                "module documentation (`//!` comments)",
+            );
         }
 
         let mut list = vec![];
@@ -658,7 +714,8 @@ impl<'code> DocumentBuilder<'code> {
         // `use a::{b, c}` expands to several statements whose brace tree
         // cannot be reconstructed from the AST alone yet.
         let [use_statement] = use_statements.inner.as_slice() else {
-            todo!()
+            return self
+                .unsupported(use_statements, "`use` statements with braces");
         };
         let ast::UseStatement {
             visibility,
@@ -702,11 +759,17 @@ impl<'code> DocumentBuilder<'code> {
         }
         list.push(self.build_type_spec(&impl_block.target, comment_inserter));
 
-        if !impl_block.where_clauses.is_empty() {
-            todo!()
+        if let Some(clause) = impl_block.where_clauses.first() {
+            self.record_unsupported(
+                where_clause_target(clause),
+                "`where` clauses",
+            );
         }
-        if !impl_block.assoc_types.is_empty() {
-            todo!()
+        if let Some(assoc_type) = impl_block.assoc_types.first() {
+            self.record_unsupported(
+                assoc_type,
+                "associated types in `impl` blocks",
+            );
         }
 
         list.push(self.text(" {"));
@@ -744,11 +807,18 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         let mut list = match &**statement {
-            ast::Statement::Label(loc) => todo!(),
-            ast::Statement::Declaration(vec) => todo!(),
+            ast::Statement::Label(_) => {
+                vec![self.unsupported(statement, "stage labels (`'label`)")]
+            }
+            ast::Statement::Declaration(_) => {
+                vec![self.unsupported(statement, "`decl` statements")]
+            }
             ast::Statement::Binding(binding) => {
-                if !binding.attrs.0.is_empty() {
-                    todo!()
+                if let Some(attribute) = binding.attrs.0.first() {
+                    self.record_unsupported(
+                        attribute,
+                        "attributes or documentation on `let` bindings",
+                    );
                 }
                 let mut list = vec![
                     self.text("let "),
@@ -769,8 +839,13 @@ impl<'code> DocumentBuilder<'code> {
 
                 list
             }
-            ast::Statement::PipelineRegMarker(loc, loc1) => {
-                todo!()
+            ast::Statement::PipelineRegMarker(_, _) => {
+                vec![
+                    self.unsupported(
+                        statement,
+                        "pipeline stage markers (`reg`)",
+                    ),
+                ]
             }
             ast::Statement::Register(register) => {
                 let mut list = vec![
@@ -787,8 +862,11 @@ impl<'code> DocumentBuilder<'code> {
                     ]);
                 }
 
-                if !register.attributes.0.is_empty() {
-                    todo!()
+                if let Some(attribute) = register.attributes.0.first() {
+                    self.record_unsupported(
+                        attribute,
+                        "attributes on `reg` statements",
+                    );
                 }
 
                 list.push(self.text(" "));
@@ -824,9 +902,20 @@ impl<'code> DocumentBuilder<'code> {
                 self.text(" = "),
                 self.build_expression(value, comment_inserter),
             ],
-            ast::Statement::Assert(loc) => todo!(),
-            ast::Statement::Expression(_, _) => todo!(),
-            ast::Statement::Type(_) => todo!(),
+            ast::Statement::Assert(_) => {
+                vec![self.unsupported(statement, "`assert` statements")]
+            }
+            ast::Statement::Expression(_, _) => {
+                vec![self.unsupported(statement, "expression statements")]
+            }
+            ast::Statement::Type(_) => {
+                vec![
+                    self.unsupported(
+                        statement,
+                        "type declarations in unit bodies",
+                    ),
+                ]
+            }
         };
         list.push(self.token(token::TokenKind::Semi));
 
@@ -872,9 +961,16 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseBracket.as_str(),
                 comment_inserter,
             ),
-            ast::Expression::ArrayShorthandLiteral(loc, loc1) => todo!(),
-            ast::Expression::Index(loc, loc1) => todo!(),
-            ast::Expression::RangeIndex { target, start, end } => todo!(),
+            ast::Expression::ArrayShorthandLiteral(_, _) => self.unsupported(
+                expression,
+                "array shorthand literals (`[expr; N]`)",
+            ),
+            ast::Expression::Index(_, _) => {
+                self.unsupported(expression, "index expressions")
+            }
+            ast::Expression::RangeIndex { .. } => {
+                self.unsupported(expression, "range index expressions")
+            }
             ast::Expression::TupleLiteral(items) => self.group(
                 token::TokenKind::OpenParen.as_str(),
                 items,
@@ -882,15 +978,31 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
-            ast::Expression::TupleIndex { .. } => todo!(),
+            ast::Expression::TupleIndex { .. } => {
+                self.unsupported(expression, "tuple index expressions")
+            }
             ast::Expression::FieldAccess(parent, field) => self.list([
                 self.build_expression(parent, comment_inserter),
                 self.text(format!(".{field}")),
             ]),
-            ast::Expression::TypeCast(_, _) => todo!(),
-            ast::Expression::LabelAccess { .. } => todo!(),
-            ast::Expression::MacroCall { .. } => todo!(),
-            ast::Expression::Incomplete(_, _) => todo!(),
+            ast::Expression::TypeCast(_, _) => {
+                self.unsupported(expression, "type casts")
+            }
+            ast::Expression::LabelAccess { .. } => self.unsupported(
+                expression,
+                "label access expressions (`@label.field`)",
+            ),
+            ast::Expression::MacroCall { .. } => {
+                self.unsupported(expression, "macro invocations")
+            }
+            // The parser recovered around a malformed expression and
+            // embedded the real diagnostic in the node instead of pushing
+            // it to its diagnostic list, so `format.rs`'s failed-parse
+            // gate never saw it.
+            ast::Expression::Incomplete(diagnostic, _) => {
+                self.diagnostics.borrow_mut().push(diagnostic.clone());
+                self.text("")
+            }
             ast::Expression::Call {
                 kind,
                 callee,
@@ -968,7 +1080,8 @@ impl<'code> DocumentBuilder<'code> {
                 // `if let` parses to a `Match`; printing it as `match`
                 // would rewrite the construct.
                 if *if_let {
-                    todo!()
+                    return self
+                        .unsupported(expression, "`if let` expressions");
                 }
                 let mut list = vec![
                     self.text("match "),
@@ -1109,27 +1222,36 @@ impl<'code> DocumentBuilder<'code> {
 
                 self.list(list)
             }
-            ast::Expression::PipelineReference {
-                stage_kw_and_reference_loc,
-                stage,
-                name,
-            } => todo!(),
-            ast::Expression::TypeLevelIf { .. } => todo!(),
-            ast::Expression::StageValid => todo!(),
-            ast::Expression::StageReady => todo!(),
-            ast::Expression::StrLiteral(loc) => todo!(),
+            ast::Expression::PipelineReference { .. } => self.unsupported(
+                expression,
+                "pipeline stage references (`stage(..)`)",
+            ),
+            ast::Expression::TypeLevelIf { .. } => {
+                self.unsupported(expression, "`gen if` expressions")
+            }
+            ast::Expression::StageValid => {
+                self.unsupported(expression, "`stage.valid`")
+            }
+            ast::Expression::StageReady => {
+                self.unsupported(expression, "`stage.ready`")
+            }
+            ast::Expression::StrLiteral(_) => {
+                self.unsupported(expression, "string literals")
+            }
             ast::Expression::Parenthesized(inner) => self.list([
                 self.token(token::TokenKind::OpenParen),
                 self.build_expression(inner, comment_inserter),
                 self.token(token::TokenKind::CloseParen),
             ]),
-            ast::Expression::Lambda {
-                unit_kind,
-                args,
-                body,
-            } => todo!(),
-            ast::Expression::Unsafe(loc) => todo!(),
-            ast::Expression::StaticUnreachable(loc) => todo!(),
+            ast::Expression::Lambda { .. } => {
+                self.unsupported(expression, "lambda expressions")
+            }
+            ast::Expression::Unsafe(_) => {
+                self.unsupported(expression, "`unsafe` blocks")
+            }
+            ast::Expression::StaticUnreachable(_) => {
+                self.unsupported(expression, "`static_unreachable!`")
+            }
         }
     }
 
@@ -1139,7 +1261,9 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         match &**turbofish {
-            ast::TurbofishInner::Named(vec) => todo!(),
+            ast::TurbofishInner::Named(_) => {
+                self.unsupported(turbofish, "named turbofish arguments")
+            }
             ast::TurbofishInner::Positional(arguments) => self.list([
                 self.token(token::TokenKind::PathSeparator),
                 self.group(
@@ -1221,7 +1345,9 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
-            ast::Pattern::Array(vec) => todo!(),
+            ast::Pattern::Array(_) => {
+                self.unsupported(pattern, "array patterns")
+            }
             ast::Pattern::Type(name, argument_pattern) => self.list([
                 self.build_path(name),
                 self.build_argument_pattern(argument_pattern, comment_inserter),
@@ -1235,7 +1361,9 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         match &**argument_pattern {
-            ast::ArgumentPattern::Named(vec) => todo!(),
+            ast::ArgumentPattern::Named(_) => {
+                self.unsupported(argument_pattern, "named argument patterns")
+            }
             ast::ArgumentPattern::Positional(tuple) => self.group(
                 token::TokenKind::OpenParen.as_str(),
                 tuple,
@@ -1263,7 +1391,9 @@ impl<'code> DocumentBuilder<'code> {
                 self.build_expression(expression, comment_inserter),
                 self.text("}"),
             ]),
-            ast::TypeExpression::String(string) => todo!(),
+            ast::TypeExpression::String(_) => {
+                self.unsupported(type_expression, "type-level strings")
+            }
         }
     }
 
@@ -1309,7 +1439,9 @@ impl<'code> DocumentBuilder<'code> {
                 self.text("&"),
                 self.build_type_expression(inner, comment_inserter),
             ]),
-            ast::TypeSpec::Impl(_) => todo!(),
+            ast::TypeSpec::Impl(_) => {
+                self.unsupported(type_spec, "`impl` trait types")
+            }
             ast::TypeSpec::Wildcard => self.text("_"),
         }
     }
@@ -1391,7 +1523,10 @@ impl<'code> DocumentBuilder<'code> {
         // `Fn(T) -> O` sugar arrives desugared; reprinting it as
         // `Fn<(T), O>` would rewrite the source.
         if trait_spec.paren_syntax {
-            todo!()
+            return self.unsupported(
+                trait_spec,
+                "parenthesized trait sugar (`Fn(..) -> ..`)",
+            );
         }
         let mut list = vec![self.build_path(&trait_spec.path)];
         if let Some(type_params) = &trait_spec.type_params {
@@ -1411,22 +1546,31 @@ impl<'code> DocumentBuilder<'code> {
         attribute: &Loc<ast::Attribute>,
     ) -> DocumentIdx {
         match &**attribute {
-            ast::Attribute::Optimize { passes } => todo!(),
+            ast::Attribute::Optimize { .. } => {
+                self.unsupported(attribute, "the `#[optimize]` attribute")
+            }
             ast::Attribute::NoMangle { all } => self.text(format!(
                 "#[no_mangle{}]",
                 if *all { "(all)" } else { "" }
             )),
-            ast::Attribute::Fsm { state } => todo!(),
+            ast::Attribute::Fsm { .. } => {
+                self.unsupported(attribute, "the `#[fsm]` attribute")
+            }
             ast::Attribute::Documentation { content } => {
                 self.text(format!("///{content}"))
             }
-            ast::Attribute::SurferTranslator(string) => todo!(),
+            ast::Attribute::SurferTranslator(_) => self
+                .unsupported(attribute, "the `#[surfer_translator]` attribute"),
             ast::Attribute::SpadecParenSugar => {
                 self.text("#[spadec_paren_sugar]")
             }
             ast::Attribute::Inline => self.text("#[inline]"),
-            ast::Attribute::Deprecated { .. } => todo!(),
-            ast::Attribute::VerilogAttrs { .. } => todo!(),
+            ast::Attribute::Deprecated { .. } => {
+                self.unsupported(attribute, "the `#[deprecated]` attribute")
+            }
+            ast::Attribute::VerilogAttrs { .. } => {
+                self.unsupported(attribute, "the `#[verilog_attrs]` attribute")
+            }
         }
     }
 
@@ -1438,11 +1582,14 @@ impl<'code> DocumentBuilder<'code> {
         // A `///` doc renders as a line comment; in inline or flattenable
         // positions everything after it on the line would be swallowed.
         if !always_newline
-            && attribute_list.0.iter().any(|attribute| {
-                matches!(**attribute, ast::Attribute::Documentation { .. })
+            && let Some(doc) = attribute_list.0.iter().find(|attribute| {
+                matches!(***attribute, ast::Attribute::Documentation { .. })
             })
         {
-            todo!()
+            self.record_unsupported(
+                doc,
+                "documentation on parameters or struct members",
+            );
         }
         self.list(match attribute_list.0.len() {
             0 => vec![],
@@ -1508,8 +1655,12 @@ impl<'code> DocumentBuilder<'code> {
             Visibility::AtLib => "pub(lib) ",
             Visibility::AtSelf => "pub(self) ",
             Visibility::AtSuper => "pub(super) ",
-            // Not producible by the parser.
-            Visibility::AtSuperSuper => todo!(),
+            // Not producible by the parser today; fail soft regardless.
+            Visibility::AtSuperSuper => {
+                return Some(
+                    self.unsupported(visibility, "this visibility level"),
+                );
+            }
         };
         Some(self.text(keyword))
     }

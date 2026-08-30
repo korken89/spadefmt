@@ -1,0 +1,4 @@
+#[surfer_translator("x")]
+fn f() -> bool {
+    true
+}

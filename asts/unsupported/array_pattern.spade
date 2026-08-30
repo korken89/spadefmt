@@ -1,0 +1,5 @@
+fn f(x: [bool; 2]) -> bool {
+    match x {
+        [a, _] => a,
+    }
+}

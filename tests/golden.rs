@@ -19,8 +19,12 @@
 //! - Idempotency: formatting must be a fixed point. [`KNOWN_NON_IDEMPOTENT`]
 //!   lists inputs where it is not yet; entries are asserted to stay broken so
 //!   fixes must shrink the list.
-//! - Panic sweep: formatting any `.spade` file under `asts/` (recursively) must
-//!   not panic. [`KNOWN_PANICS`] works like [`KNOWN_NON_IDEMPOTENT`].
+//! - Corpus sweep: formatting any `.spade` file under `asts/` (recursively)
+//!   must never panic; it either formats, fails to parse, or reports
+//!   unsupported constructs. [`KNOWN_UNSUPPORTED`] works like
+//!   [`KNOWN_NON_IDEMPOTENT`].
+//! - Unsupported fixtures: every file under `asts/unsupported/` must report at
+//!   least one located "unsupported construct" diagnostic.
 
 use std::{
     env, fs, io,
@@ -42,22 +46,60 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
     "test4.spade",
 ];
 
-/// Fixtures (relative to `asts/`) that hit a `todo!()` in the document
-/// builder. Fixing a construct moves its fixture up into `asts/` as a golden
-/// pair and removes it here. `swim-templates/` entries are only asserted when
-/// the submodule is initialized.
-const KNOWN_PANICS: &[&str] = &[
-    "panics/binding_attr.spade",
-    "panics/fn_trait_sugar.spade",
-    "panics/if_let.spade",
-    "panics/member_doc.spade",
-    "panics/module_doc.spade",
-    "panics/named_arg_pattern.spade",
-    "panics/pipeline_reg.spade",
-    "panics/tuple_index.spade",
-    "panics/unsafe_block.spade",
-    "panics/use_braces.spade",
-    "panics/variant_attr.spade",
+/// Files (relative to `asts/`) containing constructs the document builder
+/// reports as unsupported. Implementing a construct moves its
+/// `unsupported/` fixture up into `asts/` as a golden pair and removes it
+/// here. `swim-templates/` entries are only asserted when the submodule is
+/// initialized.
+const KNOWN_UNSUPPORTED: &[&str] = &[
+    "unsupported/array_pattern.spade",
+    "unsupported/array_shorthand.spade",
+    "unsupported/assert.spade",
+    "unsupported/assoc_type.spade",
+    "unsupported/binding_attr.spade",
+    "unsupported/decl.spade",
+    "unsupported/deprecated_attr.spade",
+    "unsupported/external_mod.spade",
+    "unsupported/fn_trait_sugar.spade",
+    "unsupported/fsm_attr.spade",
+    "unsupported/gen_if.spade",
+    "unsupported/if_let.spade",
+    "unsupported/impl_trait_type.spade",
+    "unsupported/impl_where.spade",
+    "unsupported/incomplete_expr.spade",
+    "unsupported/index.spade",
+    "unsupported/label.spade",
+    "unsupported/label_access.spade",
+    "unsupported/lambda.spade",
+    "unsupported/macro_call.spade",
+    "unsupported/macro_def.spade",
+    "unsupported/member_doc.spade",
+    "unsupported/mod_inner_doc.spade",
+    "unsupported/module_doc.spade",
+    "unsupported/multiple.spade",
+    "unsupported/named_arg_pattern.spade",
+    "unsupported/optimize_attr.spade",
+    "unsupported/pipeline_reg.spade",
+    "unsupported/range_index.spade",
+    "unsupported/register_attr.spade",
+    "unsupported/stage_ready.spade",
+    "unsupported/stage_ref.spade",
+    "unsupported/stage_valid.spade",
+    "unsupported/statement_expr.spade",
+    "unsupported/statement_type.spade",
+    "unsupported/str_literal.spade",
+    "unsupported/surfer_translator_attr.spade",
+    "unsupported/trait_def.spade",
+    "unsupported/tuple_index.spade",
+    "unsupported/turbofish_named.spade",
+    "unsupported/type_alias.spade",
+    "unsupported/type_cast.spade",
+    "unsupported/type_string.spade",
+    "unsupported/unsafe_block.spade",
+    "unsupported/use_braces.spade",
+    "unsupported/variant_attr.spade",
+    "unsupported/verilog_attrs.spade",
+    "unsupported/where_clause.spade",
     "swim-templates/ccgm1a1-evb/src/main.spade",
     "swim-templates/ecpix5/src/main.spade",
     "swim-templates/fomu-pvt/src/main.spade",
@@ -175,8 +217,9 @@ fn assert_clean_output(text: &str, source: &str) {
 fn format_str(code: &str, source: &str, config: &Config) -> String {
     let result = format_source(source, code, config, false);
     let Formatted { text, .. } = result.unwrap_or_else(|error| match error {
-        FormatError::Parse { diagnostics } => {
-            panic!("failed to parse {source}:\n{diagnostics}")
+        FormatError::Parse { diagnostics }
+        | FormatError::Unsupported { diagnostics } => {
+            panic!("failed to format {source}:\n{diagnostics}")
         }
         other => panic!("failed to format {source}: {other}"),
     });
@@ -330,14 +373,14 @@ fn idempotency() {
 }
 
 #[test]
-fn must_not_panic() {
+fn corpus_sweep() {
     let config = config();
     let mut files = vec![];
     all_spade_files(&asts_dir(), &mut files);
     files.sort();
     assert!(!files.is_empty(), "no .spade files found under asts/");
 
-    let mut unvisited: Vec<&str> = KNOWN_PANICS.to_vec();
+    let mut unvisited: Vec<&str> = KNOWN_UNSUPPORTED.to_vec();
     let mut failures = vec![];
     for path in &files {
         let relative = path
@@ -353,23 +396,32 @@ fn must_not_panic() {
             Err(error) => panic!("failed to read {path:?}: {error}"),
         };
 
-        // Parse errors are fine here: files only must not panic. Expected
-        // panics from KNOWN_PANICS fixtures print a panic message, but
-        // libtest discards captured output when the test passes.
-        let panicked = panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = format_source(&relative, &code, &config, false);
-        }))
-        .is_err();
+        let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+            format_source(&relative, &code, &config, false).map(|_| ())
+        }));
 
         unvisited.retain(|entry| *entry != relative);
-        match (panicked, KNOWN_PANICS.contains(&relative.as_str())) {
-            (true, false) => {
-                failures.push(format!("{relative}: formatting panicked"))
+        let listed = KNOWN_UNSUPPORTED.contains(&relative.as_str());
+        match outcome {
+            Err(_) => failures.push(format!("{relative}: formatting panicked")),
+            Ok(Err(FormatError::Unsupported { .. })) if listed => {}
+            Ok(Err(FormatError::Unsupported { diagnostics })) => {
+                failures.push(format!(
+                    "{relative}: unsupported constructs; implement them or \
+                     add the file to KNOWN_UNSUPPORTED:\n{diagnostics}"
+                ))
             }
-            (false, true) => failures.push(format!(
-                "{relative}: no longer panics; remove it from KNOWN_PANICS"
+            // Parse errors are fine for unlisted files: the sweep only
+            // requires a controlled outcome.
+            Ok(Err(FormatError::Parse { .. })) if !listed => {}
+            Ok(Err(error)) => {
+                failures.push(format!("{relative}: failed to format: {error}"))
+            }
+            Ok(Ok(())) if listed => failures.push(format!(
+                "{relative}: no longer unsupported; remove it from \
+                 KNOWN_UNSUPPORTED"
             )),
-            _ => {}
+            Ok(Ok(())) => {}
         }
     }
     // A plain clone (no `git submodule update --init`) leaves swim-templates
@@ -381,8 +433,104 @@ fn must_not_panic() {
         if !swim_populated && entry.starts_with("swim-templates/") {
             continue;
         }
-        failures.push(format!("{entry}: listed in KNOWN_PANICS but not swept"));
+        failures.push(format!(
+            "{entry}: listed in KNOWN_UNSUPPORTED but not swept"
+        ));
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every `asts/unsupported/` fixture must report at least one located
+/// diagnostic that names the file, and never format successfully.
+#[test]
+fn unsupported_fixtures_report_diagnostics() {
+    let config = config();
+    let mut files = vec![];
+    all_spade_files(&asts_dir().join("unsupported"), &mut files);
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no fixtures found under asts/unsupported/"
+    );
+
+    for path in files {
+        let relative = path
+            .strip_prefix(asts_dir())
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let code = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {path:?}: {error}"));
+        match format_source(&relative, &code, &config, false) {
+            Err(FormatError::Unsupported { diagnostics }) => {
+                assert!(
+                    diagnostics.contains(&relative),
+                    "diagnostics for {relative} do not point into the \
+                     file:\n{diagnostics}"
+                );
+            }
+            Ok(_) => panic!(
+                "{relative} formats successfully; move it out of \
+                 asts/unsupported/"
+            ),
+            Err(FormatError::Parse { diagnostics }) => panic!(
+                "{relative} does not parse; unsupported fixtures must \
+                 exercise the document builder:\n{diagnostics}"
+            ),
+            Err(error) => {
+                panic!("{relative}: failed to format: {error}")
+            }
+        }
+    }
+}
+
+/// All unsupported constructs in a file are reported in one run.
+#[test]
+fn unsupported_diagnostics_are_collected() {
+    let config = config();
+    let path = asts_dir().join("unsupported/multiple.spade");
+    let code = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {path:?}: {error}"));
+    let Err(FormatError::Unsupported { diagnostics }) =
+        format_source("unsupported/multiple.spade", &code, &config, false)
+    else {
+        panic!(
+            "unsupported/multiple.spade should report unsupported \
+                constructs"
+        )
+    };
+    for expected in ["`assert` statements", "index expressions"] {
+        assert!(
+            diagnostics.contains(expected),
+            "diagnostics do not mention {expected}:\n{diagnostics}"
+        );
+    }
+}
+
+/// A recovered-but-incomplete expression surfaces the parser's own
+/// diagnostic (it is embedded in the AST node, not in the parser's
+/// diagnostic list), not a generic "unsupported" message.
+#[test]
+fn incomplete_expression_reports_embedded_diagnostic() {
+    let config = config();
+    let path = asts_dir().join("unsupported/incomplete_expr.spade");
+    let code = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {path:?}: {error}"));
+    let Err(FormatError::Unsupported { diagnostics }) = format_source(
+        "unsupported/incomplete_expr.spade",
+        &code,
+        &config,
+        false,
+    ) else {
+        panic!(
+            "unsupported/incomplete_expr.spade should report the embedded \
+             parser diagnostic"
+        )
+    };
+    assert!(
+        diagnostics.contains("Expected an identifier after `.`"),
+        "diagnostics do not surface the parser's embedded message:\n\
+         {diagnostics}"
+    );
 }

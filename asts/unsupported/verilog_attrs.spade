@@ -1,0 +1,4 @@
+#[verilog_attrs(keep)]
+fn f() -> bool {
+    true
+}

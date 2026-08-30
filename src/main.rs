@@ -64,9 +64,9 @@ fn main() -> Result<(), Whatever> {
             return Err(error).whatever_context("Failed to parse input");
         }
     };
-    // Flushed before formatting, which can still panic on unsupported
-    // constructs. Stderr, so diagnostics never mix into the formatted
-    // output.
+    // Flushed before formatting, which reports its own diagnostics on
+    // unsupported constructs. Stderr, so diagnostics never mix into the
+    // formatted output.
     eprint!("{}", parsed.diagnostics);
 
     let output = if opts.debug {
@@ -74,7 +74,17 @@ fn main() -> Result<(), Whatever> {
     } else {
         parsed.format(&config)
     };
-    print!("{}", output.whatever_context("Failed to print document")?);
+    let output = match output {
+        Ok(output) => output,
+        Err(FormatError::Unsupported { diagnostics }) => {
+            eprint!("{diagnostics}");
+            whatever!("Exiting due to unsupported constructs")
+        }
+        Err(error) => {
+            return Err(error).whatever_context("Failed to print document");
+        }
+    };
+    print!("{output}");
 
     Ok(())
 }

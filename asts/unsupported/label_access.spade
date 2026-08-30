@@ -1,0 +1,4 @@
+fn f() -> bool {
+    let y = @a.b;
+    true
+}

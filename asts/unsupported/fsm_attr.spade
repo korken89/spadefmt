@@ -1,0 +1,4 @@
+#[fsm]
+fn f() -> bool {
+    true
+}

@@ -19,11 +19,13 @@ use std::{
 
 use itertools::Itertools;
 use snafu::{ResultExt, Snafu};
-use spade::error_handling::Reportable;
+use spade::error_handling::{ErrorHandler, Reportable};
 use spade_ast::ModuleBody;
 use spade_codespan_reporting::{files::SimpleFiles, term::termcolor::Buffer};
 use spade_common::location_info::Loc;
-use spade_diagnostics::{CodeBundle, DiagHandler, emitter::CodespanEmitter};
+use spade_diagnostics::{
+    CodeBundle, DiagHandler, Diagnostic, emitter::CodespanEmitter,
+};
 use spade_parser::Comment;
 
 use crate::{
@@ -49,6 +51,10 @@ pub enum FormatError {
     /// Parsing failed; `diagnostics` holds the rendered errors.
     #[snafu(display("Failed to parse input"))]
     Parse { diagnostics: String },
+    /// The input contains constructs the document builder does not support
+    /// yet; `diagnostics` holds the rendered errors, one per construct.
+    #[snafu(display("Input contains constructs spadefmt cannot format yet"))]
+    Unsupported { diagnostics: String },
     #[snafu(display("Failed to print document"))]
     Print { source: fmt::Error },
 }
@@ -56,16 +62,39 @@ pub enum FormatError {
 /// A successfully parsed source file, ready for formatting.
 ///
 /// Parsing is split from formatting so callers can flush `diagnostics`
-/// before [`Parsed::format`], which may panic on constructs the document
-/// builder does not support yet.
+/// before [`Parsed::format`], which reports its own diagnostics on
+/// constructs the document builder does not support yet.
 pub struct Parsed {
     code: String,
     root: Loc<ModuleBody>,
     comments: Vec<Comment>,
     code_bundle: Arc<RwLock<CodeBundle>>,
     file_id: usize,
+    color: bool,
     /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
+}
+
+/// Runs `operation` with an [`ErrorHandler`] rendering into a fresh buffer
+/// and returns its result alongside the rendered diagnostics. `color`
+/// enables ANSI colors.
+fn with_error_handler<R>(
+    code_bundle: &Arc<RwLock<CodeBundle>>,
+    color: bool,
+    operation: impl FnOnce(&mut ErrorHandler) -> R,
+) -> (R, String) {
+    let mut buffer = if color {
+        Buffer::ansi()
+    } else {
+        Buffer::no_color()
+    };
+    let diagnostic_handler = DiagHandler::new(Box::new(CodespanEmitter));
+    let mut error_handler =
+        ErrorHandler::new(&mut buffer, diagnostic_handler, code_bundle.clone());
+    let result = operation(&mut error_handler);
+    drop(error_handler);
+    let rendered = String::from_utf8_lossy(buffer.as_slice()).into_owned();
+    (result, rendered)
 }
 
 /// Parses `code` (from `file_name`, used in diagnostics). `color` enables
@@ -78,32 +107,23 @@ pub fn parse_source(
     let mut files = SimpleFiles::new();
     let file_id = files.add(file_name.to_string(), code.to_string());
 
-    let diagnostic_handler = DiagHandler::new(Box::new(CodespanEmitter));
     let code_bundle = Arc::new(RwLock::new(CodeBundle {
         files,
         file_ids: HashMap::from_iter([(file_name.to_string(), file_id)]),
     }));
 
-    let mut buffer = if color {
-        Buffer::ansi()
-    } else {
-        Buffer::no_color()
-    };
-
-    let mut error_handler = spade::error_handling::ErrorHandler::new(
-        &mut buffer,
-        diagnostic_handler,
-        code_bundle.clone(),
-    );
-
     let mut parser = spade_parser::Parser::new(code, file_id, None);
 
-    let root_opt = parser.top_level_module_body().or_report(&mut error_handler);
-    error_handler.drain_diag_list(&mut parser.diags);
-    // The parser can recover from errors and return a module body with the
-    // offending items dropped; formatting that would silently delete code.
-    let failed = error_handler.failed();
-    let diagnostics = String::from_utf8_lossy(buffer.as_slice()).into_owned();
+    let ((root_opt, failed), diagnostics) =
+        with_error_handler(&code_bundle, color, |error_handler| {
+            let root_opt =
+                parser.top_level_module_body().or_report(error_handler);
+            error_handler.drain_diag_list(&mut parser.diags);
+            // The parser can recover from errors and return a module body
+            // with the offending items dropped; formatting that would
+            // silently delete code.
+            (root_opt, error_handler.failed())
+        });
 
     let Some(root) = root_opt.filter(|_| !failed) else {
         return ParseSnafu { diagnostics }.fail();
@@ -115,12 +135,16 @@ pub fn parse_source(
         comments: parser.comments().to_vec(),
         code_bundle,
         file_id,
+        color,
         diagnostics,
     })
 }
 
 impl Parsed {
-    fn build(&self, config: &Config) -> (InternedDocumentStore, DocumentIdx) {
+    fn build(
+        &self,
+        config: &Config,
+    ) -> (InternedDocumentStore, DocumentIdx, Vec<Diagnostic>) {
         let code_bundle_guard = self.code_bundle.read().unwrap();
         let file = code_bundle_guard.files.get(self.file_id).unwrap();
         DocumentBuilder::new(config.indent.inner as isize).build_root(
@@ -130,9 +154,25 @@ impl Parsed {
         )
     }
 
+    /// Renders `diagnostics` the same way parse-time ones are rendered.
+    fn render_diagnostics(&self, diagnostics: &[Diagnostic]) -> String {
+        with_error_handler(&self.code_bundle, self.color, |error_handler| {
+            for diagnostic in diagnostics {
+                error_handler.report(diagnostic);
+            }
+        })
+        .1
+    }
+
     /// Renders the formatted source according to `config`.
     pub fn format(&self, config: &Config) -> Result<String, FormatError> {
-        let (mut store, root_idx) = self.build(config);
+        let (mut store, root_idx, unsupported) = self.build(config);
+        if !unsupported.is_empty() {
+            return UnsupportedSnafu {
+                diagnostics: self.render_diagnostics(&unsupported),
+            }
+            .fail();
+        }
 
         let new_root_idx = resolve_try_catch(
             &mut store,
@@ -161,7 +201,13 @@ impl Parsed {
         &self,
         config: &Config,
     ) -> Result<String, FormatError> {
-        let (store, root_idx) = self.build(config);
+        let (store, root_idx, unsupported) = self.build(config);
+        if !unsupported.is_empty() {
+            return UnsupportedSnafu {
+                diagnostics: self.render_diagnostics(&unsupported),
+            }
+            .fail();
+        }
 
         let mut buffer = String::new();
         let mut f =
