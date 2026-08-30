@@ -1,0 +1,5 @@
+fn u(x: bool) -> bool {
+    unsafe {
+        x
+    }
+}

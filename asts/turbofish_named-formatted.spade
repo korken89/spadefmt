@@ -1,0 +1,5 @@
+fn f(x: bool) -> bool {
+    let a = g::$<N: 8>(x);
+    let b = g::$<N>(x);
+    x.m::$<T: bool>()
+}

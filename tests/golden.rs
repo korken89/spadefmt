@@ -53,21 +53,15 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 /// initialized.
 const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/array_pattern.spade",
-    "unsupported/array_shorthand.spade",
     "unsupported/assoc_type.spade",
     "unsupported/binding_attr.spade",
     "unsupported/deprecated_attr.spade",
     "unsupported/external_mod.spade",
     "unsupported/fn_trait_sugar.spade",
     "unsupported/fsm_attr.spade",
-    "unsupported/gen_if.spade",
-    "unsupported/if_let.spade",
     "unsupported/impl_trait_type.spade",
     "unsupported/impl_where.spade",
     "unsupported/incomplete_expr.spade",
-    "unsupported/index.spade",
-    "unsupported/label_access.spade",
-    "unsupported/lambda.spade",
     "unsupported/macro_call.spade",
     "unsupported/macro_def.spade",
     "unsupported/member_doc.spade",
@@ -76,31 +70,13 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/multiple.spade",
     "unsupported/named_arg_pattern.spade",
     "unsupported/optimize_attr.spade",
-    "unsupported/range_index.spade",
-    "unsupported/stage_ready.spade",
-    "unsupported/stage_ref.spade",
-    "unsupported/stage_valid.spade",
-    "unsupported/str_literal.spade",
     "unsupported/surfer_translator_attr.spade",
     "unsupported/trait_def.spade",
-    "unsupported/tuple_index.spade",
-    "unsupported/turbofish_named.spade",
     "unsupported/type_alias.spade",
-    "unsupported/type_cast.spade",
-    "unsupported/type_string.spade",
-    "unsupported/unsafe_block.spade",
     "unsupported/use_braces.spade",
     "unsupported/variant_attr.spade",
     "unsupported/verilog_attrs.spade",
     "unsupported/where_clause.spade",
-    "swim-templates/ccgm1a1-evb/src/main.spade",
-    "swim-templates/ecpix5/src/main.spade",
-    "swim-templates/fomu-pvt/src/main.spade",
-    "swim-templates/go-board/src/main.spade",
-    "swim-templates/tangnano20k/src/main.spade",
-    "swim-templates/tangnano4k/src/main.spade",
-    "swim-templates/tangnano9k/src/main.spade",
-    "swim-templates/ulx3s_85k/src/main.spade",
 ];
 
 const BLESS_HINT: &str =
@@ -492,7 +468,10 @@ fn unsupported_diagnostics_are_collected() {
                 constructs"
         )
     };
-    for expected in ["type casts", "index expressions"] {
+    for expected in [
+        "array patterns",
+        "attributes or documentation on `let` bindings",
+    ] {
         assert!(
             diagnostics.contains(expected),
             "diagnostics do not mention {expected}:\n{diagnostics}"

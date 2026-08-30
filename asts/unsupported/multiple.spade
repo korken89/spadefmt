@@ -1,4 +1,6 @@
-fn f(x: [int<8>; 4]) -> int<8> {
-    let y = x as int<9>;
-    x[0]
+fn f(x: [bool; 2]) -> bool {
+    let [a, b] = x;
+    #[no_mangle]
+    let y = a;
+    y
 }

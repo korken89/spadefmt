@@ -1,0 +1,7 @@
+fn f(x: [bool; 4]) -> [bool; 2] {
+    let a = x[0..2];
+    let b = x[..2];
+    let c = x[2..];
+    let d = x[..];
+    a
+}

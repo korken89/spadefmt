@@ -1,0 +1,18 @@
+fn f(x: bool) -> bool {
+    let a = gen if true {
+        x
+    } else {
+        x
+    };
+    let b = gen if true {
+        x
+    };
+    let c = gen if true {
+        x
+    } else if false {
+        x
+    } else {
+        x
+    };
+    a
+}

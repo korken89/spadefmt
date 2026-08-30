@@ -1,0 +1,10 @@
+fn f() -> bool {
+    let g = fn |x, y| x;
+    let h = fn || {
+        let a = true;
+        a
+    };
+    let e = entity |x| x;
+    let p = pipeline(1) |x| x;
+    true
+}

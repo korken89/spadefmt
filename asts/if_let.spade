@@ -1,0 +1,10 @@
+fn f(x: Option<bool>) -> bool {
+    let a = if let Some(y) = x { y } else { false };
+    if let Some(y) = x {
+        y
+    } else if let Some(z) = x {
+        z
+    } else {
+        false
+    }
+}

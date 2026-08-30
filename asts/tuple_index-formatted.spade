@@ -1,0 +1,5 @@
+fn first(x: (bool, bool)) -> bool {
+    let a = x.0;
+    let b = x.1;
+    a
+}

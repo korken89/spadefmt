@@ -1,3 +1,0 @@
-fn f(x: bool) -> bool {
-    g::$<N: 8>(x)
-}

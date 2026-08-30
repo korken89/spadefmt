@@ -1,0 +1,9 @@
+pipeline(2) p(clk: clock, x: bool) -> bool {
+    'first
+    reg;
+    let a = stage(-1).x;
+    let b = stage(+1).a;
+    reg;
+    let c = stage(first).x;
+    c
+}

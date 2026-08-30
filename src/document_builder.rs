@@ -82,6 +82,7 @@ can_build!(Loc<ast::TypeExpression>: build_type_expression);
 can_build!(Loc<ast::TypeParam>: build_type_param);
 can_build!(Loc<ast::TraitSpec>: build_trait_spec);
 can_build!(ast::NamedArgument: build_named_argument);
+can_build!(ast::NamedTurbofish: build_named_turbofish);
 can_build!(Loc<ast::Pattern>: build_pattern);
 
 pub type AstParameter = (
@@ -988,15 +989,35 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseBracket.as_str(),
                 comment_inserter,
             ),
-            ast::Expression::ArrayShorthandLiteral(_, _) => self.unsupported(
-                expression,
-                "array shorthand literals (`[expr; N]`)",
-            ),
-            ast::Expression::Index(_, _) => {
-                self.unsupported(expression, "index expressions")
-            }
-            ast::Expression::RangeIndex { .. } => {
-                self.unsupported(expression, "range index expressions")
+            ast::Expression::ArrayShorthandLiteral(element, amount) => self
+                .list([
+                    self.token(token::TokenKind::OpenBracket),
+                    self.build_expression(element, comment_inserter),
+                    self.token(token::TokenKind::Semi),
+                    self.text(" "),
+                    self.build_expression(amount, comment_inserter),
+                    self.token(token::TokenKind::CloseBracket),
+                ]),
+            ast::Expression::Index(target, index) => self.list([
+                self.build_expression(target, comment_inserter),
+                self.token(token::TokenKind::OpenBracket),
+                self.build_expression(index, comment_inserter),
+                self.token(token::TokenKind::CloseBracket),
+            ]),
+            ast::Expression::RangeIndex { target, start, end } => {
+                let mut list = vec![
+                    self.build_expression(target, comment_inserter),
+                    self.token(token::TokenKind::OpenBracket),
+                ];
+                if let Some(start) = start {
+                    list.push(self.build_expression(start, comment_inserter));
+                }
+                list.push(self.token(token::TokenKind::DotDot));
+                if let Some(end) = end {
+                    list.push(self.build_expression(end, comment_inserter));
+                }
+                list.push(self.token(token::TokenKind::CloseBracket));
+                self.list(list)
             }
             ast::Expression::TupleLiteral(items) => self.group(
                 token::TokenKind::OpenParen.as_str(),
@@ -1005,20 +1026,25 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
-            ast::Expression::TupleIndex { .. } => {
-                self.unsupported(expression, "tuple index expressions")
-            }
+            // The deprecated `x#0` syntax normalizes to `x.0`.
+            ast::Expression::TupleIndex { target, index, .. } => self.list([
+                self.build_expression(target, comment_inserter),
+                self.text(format!(".{}", **index)),
+            ]),
             ast::Expression::FieldAccess(parent, field) => self.list([
                 self.build_expression(parent, comment_inserter),
                 self.text(format!(".{field}")),
             ]),
-            ast::Expression::TypeCast(_, _) => {
-                self.unsupported(expression, "type casts")
-            }
-            ast::Expression::LabelAccess { .. } => self.unsupported(
-                expression,
-                "label access expressions (`@label.field`)",
-            ),
+            ast::Expression::TypeCast(target, ty) => self.list([
+                self.build_expression(target, comment_inserter),
+                self.text(" as "),
+                self.build_type_expression(ty, comment_inserter),
+            ]),
+            ast::Expression::LabelAccess { label, field } => self.list([
+                self.text("@"),
+                self.build_path(label),
+                self.text(format!(".{field}")),
+            ]),
             ast::Expression::MacroCall { .. } => {
                 self.unsupported(expression, "macro invocations")
             }
@@ -1104,11 +1130,26 @@ impl<'code> DocumentBuilder<'code> {
                 branches: arms,
                 if_let,
             } => {
-                // `if let` parses to a `Match`; printing it as `match`
-                // would rewrite the construct.
+                // `if let` parses to a two-branch `Match` whose second
+                // pattern is a synthetic `_`; reconstruct the original.
                 if *if_let {
+                    if let [(pattern, None, on_true), (_, None, on_false)] =
+                        &arms.inner[..]
+                    {
+                        return self.list([
+                            self.text("if let "),
+                            self.build_pattern(pattern, comment_inserter),
+                            self.text(" = "),
+                            self.build_expression(against, comment_inserter),
+                            self.text(" "),
+                            self.build_expression(on_true, comment_inserter),
+                            self.text(" else "),
+                            self.build_expression(on_false, comment_inserter),
+                        ]);
+                    }
+                    // Unreachable from the parser.
                     return self
-                        .unsupported(expression, "`if let` expressions");
+                        .unsupported(expression, "this `if let` expression");
                 }
                 let mut list = vec![
                     self.text("match "),
@@ -1182,104 +1223,242 @@ impl<'code> DocumentBuilder<'code> {
                 self.text(format!(" {} ", binary_operator_str(op))),
                 self.build_expression(right, comment_inserter),
             ]),
-            ast::Expression::Block(block) => {
-                let mut list = vec![self.token(token::TokenKind::OpenBrace)];
-                if block.statements.len()
-                    + block.result.as_ref().map_or(0, |_| 1)
-                    > 0
-                {
-                    list.push(self.newline());
-
-                    let mut nest = vec![];
-
-                    let mut last_line_index = expression.line_index(self);
-                    for (i, statement) in block.statements.iter().enumerate() {
-                        let item_line_index = statement.line_index(self);
-
-                        nest.extend(self.pull_comments(
-                            comment_inserter,
-                            last_line_index,
-                            item_line_index,
-                            true,
-                            Some(&mut last_line_index),
-                        ));
-
-                        if i > 0 && last_line_index + 1 < item_line_index {
-                            nest.push(self.newline());
-                        }
-                        nest.push(
-                            self.build_statement(statement, comment_inserter),
-                        );
-                        nest.push(self.newline());
-                        last_line_index = statement.end_line_index(self);
-                    }
-
-                    nest.extend(self.pull_comments(
-                        comment_inserter,
-                        last_line_index,
-                        expression.end_line_index(self),
-                        true,
-                        Some(&mut last_line_index),
-                    ));
-
-                    if let Some(result) = &block.result {
-                        if last_line_index + 1 < result.line_index(self) {
-                            nest.push(self.newline());
-                        }
-
-                        nest.push(
-                            self.build_expression(result, comment_inserter),
-                        );
-                        nest.push(self.newline());
-
-                        last_line_index = result.end_line_index(self);
-                    }
-
-                    nest.extend(self.pull_comments(
-                        comment_inserter,
-                        last_line_index,
-                        expression.end_line_index(self),
-                        true,
-                        None,
-                    ));
-
-                    list.push(self.nest(self.trim_list(nest), self.indent));
-                }
-                list.push(self.token(token::TokenKind::CloseBrace));
-
-                self.list(list)
-            }
-            ast::Expression::PipelineReference { .. } => self.unsupported(
-                expression,
-                "pipeline stage references (`stage(..)`)",
+            ast::Expression::Block(block) => self.build_block(
+                block,
+                expression.line_index(self),
+                expression.end_line_index(self),
+                comment_inserter,
             ),
-            ast::Expression::TypeLevelIf { .. } => {
-                self.unsupported(expression, "`gen if` expressions")
+            ast::Expression::PipelineReference { stage, name, .. } => {
+                let stage_doc = match stage {
+                    ast::PipelineStageReference::Absolute(identifier) => {
+                        self.text(identifier.to_string())
+                    }
+                    // The parser eats the mandatory sign; `-` survives
+                    // as a synthetic outer negation.
+                    ast::PipelineStageReference::Relative(offset) => {
+                        match &**offset {
+                            ast::TypeExpression::ConstGeneric(offset) => {
+                                match &***offset {
+                                    ast::Expression::UnaryOperator(
+                                        operator,
+                                        inner,
+                                    ) if matches!(
+                                        **operator,
+                                        ast::UnaryOperator::Sub
+                                    ) =>
+                                    {
+                                        self.list([
+                                            self.text("-"),
+                                            self.build_expression(
+                                                inner,
+                                                comment_inserter,
+                                            ),
+                                        ])
+                                    }
+                                    _ => self.list([
+                                        self.text("+"),
+                                        self.build_expression(
+                                            offset,
+                                            comment_inserter,
+                                        ),
+                                    ]),
+                                }
+                            }
+                            _ => self.unsupported(
+                                offset,
+                                "this pipeline stage reference",
+                            ),
+                        }
+                    }
+                };
+                self.list([
+                    self.text("stage("),
+                    stage_doc,
+                    self.text(format!(").{name}")),
+                ])
             }
-            ast::Expression::StageValid => {
-                self.unsupported(expression, "`stage.valid`")
-            }
-            ast::Expression::StageReady => {
-                self.unsupported(expression, "`stage.ready`")
-            }
-            ast::Expression::StrLiteral(_) => {
-                self.unsupported(expression, "string literals")
+            ast::Expression::TypeLevelIf {
+                cond,
+                on_true,
+                on_false,
+            } => self.list([
+                self.text("gen "),
+                self.build_gen_if(cond, on_true, on_false, comment_inserter),
+            ]),
+            ast::Expression::StageValid => self.text("stage.valid"),
+            ast::Expression::StageReady => self.text("stage.ready"),
+            // Spade strings have no escape sequences, so the parsed
+            // value is the exact source text.
+            ast::Expression::StrLiteral(value) => {
+                self.text(format!("\"{}\"", **value))
             }
             ast::Expression::Parenthesized(inner) => self.list([
                 self.token(token::TokenKind::OpenParen),
                 self.build_expression(inner, comment_inserter),
                 self.token(token::TokenKind::CloseParen),
             ]),
-            ast::Expression::Lambda { .. } => {
-                self.unsupported(expression, "lambda expressions")
+            ast::Expression::Lambda {
+                unit_kind,
+                args,
+                body,
+            } => {
+                let mut list = vec![match &**unit_kind {
+                    ast::UnitKind::Function => self.text("fn "),
+                    ast::UnitKind::Entity => self.text("entity "),
+                    ast::UnitKind::Pipeline(depth) => self.list([
+                        self.text("pipeline("),
+                        self.build_type_expression(depth, comment_inserter),
+                        self.text(") "),
+                    ]),
+                }];
+                if args.is_empty() {
+                    list.push(self.text("||"));
+                } else {
+                    list.push(self.group(
+                        "|",
+                        &args.inner,
+                        token::TokenKind::Comma,
+                        "|",
+                        comment_inserter,
+                    ));
+                }
+                list.push(self.text(" "));
+                // A bare-expression body parses as a statement-less
+                // block; print it back bare.
+                match (&body.statements[..], &body.result) {
+                    ([], Some(result)) => list
+                        .push(self.build_expression(result, comment_inserter)),
+                    _ => list.push(self.build_block(
+                        body,
+                        body.line_index(self),
+                        body.end_line_index(self),
+                        comment_inserter,
+                    )),
+                }
+                self.list(list)
             }
-            ast::Expression::Unsafe(_) => {
-                self.unsupported(expression, "`unsafe` blocks")
-            }
+            ast::Expression::Unsafe(block) => self.list([
+                self.text("unsafe "),
+                self.build_block(
+                    block,
+                    block.line_index(self),
+                    block.end_line_index(self),
+                    comment_inserter,
+                ),
+            ]),
             ast::Expression::StaticUnreachable(_) => {
                 self.unsupported(expression, "`static_unreachable!`")
             }
         }
+    }
+
+    /// A `gen if` chain without the leading `gen` keyword, which is only
+    /// valid at the head of the chain (`else if`, not `else gen if`).
+    fn build_gen_if(
+        &self,
+        cond: &Loc<ast::Expression>,
+        on_true: &Loc<ast::Expression>,
+        on_false: &Loc<ast::Expression>,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let mut list = vec![
+            self.text("if "),
+            self.build_expression(cond, comment_inserter),
+            self.text(" "),
+            self.build_expression(on_true, comment_inserter),
+        ];
+        // A missing `else` is stored as a synthetic empty block;
+        // `else {}` is dropped either way.
+        let empty_else = matches!(
+            &**on_false,
+            ast::Expression::Block(block)
+                if block.statements.is_empty() && block.result.is_none()
+        );
+        if !empty_else {
+            list.push(self.text(" else "));
+            list.push(match &**on_false {
+                ast::Expression::TypeLevelIf {
+                    cond,
+                    on_true,
+                    on_false,
+                } => {
+                    self.build_gen_if(cond, on_true, on_false, comment_inserter)
+                }
+                _ => self.build_expression(on_false, comment_inserter),
+            });
+        }
+        self.list(list)
+    }
+
+    /// The braces and contents of a block, with blank-line gaps and
+    /// comments preserved; the line indices come from the span the block
+    /// was found at.
+    pub fn build_block(
+        &self,
+        block: &ast::Block,
+        start_line_index: usize,
+        end_line_index: usize,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let mut list = vec![self.token(token::TokenKind::OpenBrace)];
+        if block.statements.len() + block.result.as_ref().map_or(0, |_| 1) > 0 {
+            list.push(self.newline());
+
+            let mut nest = vec![];
+
+            let mut last_line_index = start_line_index;
+            for (i, statement) in block.statements.iter().enumerate() {
+                let item_line_index = statement.line_index(self);
+
+                nest.extend(self.pull_comments(
+                    comment_inserter,
+                    last_line_index,
+                    item_line_index,
+                    true,
+                    Some(&mut last_line_index),
+                ));
+
+                if i > 0 && last_line_index + 1 < item_line_index {
+                    nest.push(self.newline());
+                }
+                nest.push(self.build_statement(statement, comment_inserter));
+                nest.push(self.newline());
+                last_line_index = statement.end_line_index(self);
+            }
+
+            nest.extend(self.pull_comments(
+                comment_inserter,
+                last_line_index,
+                end_line_index,
+                true,
+                Some(&mut last_line_index),
+            ));
+
+            if let Some(result) = &block.result {
+                if last_line_index + 1 < result.line_index(self) {
+                    nest.push(self.newline());
+                }
+
+                nest.push(self.build_expression(result, comment_inserter));
+                nest.push(self.newline());
+
+                last_line_index = result.end_line_index(self);
+            }
+
+            nest.extend(self.pull_comments(
+                comment_inserter,
+                last_line_index,
+                end_line_index,
+                true,
+                None,
+            ));
+
+            list.push(self.nest(self.trim_list(nest), self.indent));
+        }
+        list.push(self.token(token::TokenKind::CloseBrace));
+
+        self.list(list)
     }
 
     pub fn build_turbofish(
@@ -1288,9 +1467,16 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         match &**turbofish {
-            ast::TurbofishInner::Named(_) => {
-                self.unsupported(turbofish, "named turbofish arguments")
-            }
+            ast::TurbofishInner::Named(arguments) => self.list([
+                self.token(token::TokenKind::PathSeparator),
+                self.group(
+                    "$<",
+                    arguments,
+                    token::TokenKind::Comma,
+                    token::TokenKind::Gt.as_str(),
+                    comment_inserter,
+                ),
+            ]),
             ast::TurbofishInner::Positional(arguments) => self.list([
                 self.token(token::TokenKind::PathSeparator),
                 self.group(
@@ -1324,6 +1510,20 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
+        }
+    }
+
+    pub fn build_named_turbofish(
+        &self,
+        named_turbofish: &ast::NamedTurbofish,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        match named_turbofish {
+            ast::NamedTurbofish::Full(name, value) => self.list([
+                self.text(format!("{name}: ")),
+                self.build_type_expression(value, comment_inserter),
+            ]),
+            ast::NamedTurbofish::Short(name) => self.text(name.to_string()),
         }
     }
 
@@ -1418,8 +1618,10 @@ impl<'code> DocumentBuilder<'code> {
                 self.build_expression(expression, comment_inserter),
                 self.text("}"),
             ]),
-            ast::TypeExpression::String(_) => {
-                self.unsupported(type_expression, "type-level strings")
+            // Same no-escape lexing as string literals: the parsed
+            // value is the exact source text.
+            ast::TypeExpression::String(value) => {
+                self.text(format!("\"{value}\""))
             }
         }
     }

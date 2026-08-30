@@ -1,0 +1,3 @@
+fn f(x: int<8>) -> int<16> {
+    x as int<16>
+}

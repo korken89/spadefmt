@@ -1,3 +1,0 @@
-fn f(x: [bool; 4]) -> bool {
-    x[0]
-}

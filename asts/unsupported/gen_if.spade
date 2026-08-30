@@ -1,3 +1,0 @@
-fn f(x: bool) -> bool {
-    gen if true { x } else { x }
-}

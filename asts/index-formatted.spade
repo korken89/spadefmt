@@ -1,0 +1,4 @@
+fn f(x: [bool; 4], i: int<2>) -> bool {
+    let first = x[0];
+    x[i]
+}
