@@ -1,0 +1,4 @@
+fn f(x: [bool; 2], y: [(bool, bool); 2]) -> bool {
+    let [a, _] = x;
+    match y { [(b, c), _] => b }
+}

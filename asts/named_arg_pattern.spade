@@ -1,10 +1,10 @@
 enum State {
-    Foo { field: int<8> },
+    Foo { field: int<8>, other: bool },
 }
 
 fn is_zero_foo(state: State) -> bool {
     match state {
-        State::Foo$(field: 0) => true,
+        State::Foo$(field: 0, other) => other,
         _ => false,
     }
 }

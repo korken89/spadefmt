@@ -1,0 +1,7 @@
+fn f(x: impl Copy) -> bool {
+    true
+}
+
+fn g(x: impl A + B) -> bool {
+    true
+}

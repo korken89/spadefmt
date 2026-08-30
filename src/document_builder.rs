@@ -97,6 +97,11 @@ can_build!(AstParameter: build_parameter);
 /// An array literal element with an optional `'label`.
 pub type AstArrayElement = (Option<Loc<Identifier>>, Loc<ast::Expression>);
 
+/// A named argument in a type pattern: `field: pat`, or `field` shorthand.
+pub type AstNamedPatternArgument = (Loc<Identifier>, Option<Loc<ast::Pattern>>);
+
+can_build!(AstNamedPatternArgument: build_named_pattern_argument);
+
 can_build!(AstArrayElement: build_array_element);
 
 can_build!(ast::EnumVariant: build_enum_variant);
@@ -178,6 +183,20 @@ impl HasLineNumber for AstParameter {
             .first()
             .map(|first| first.span)
             .unwrap_or(self.2.span)
+            .end_line_index(builder)
+    }
+}
+
+impl HasLineNumber for AstNamedPatternArgument {
+    fn line_index(&self, builder: &DocumentBuilder) -> usize {
+        self.0.line_index(builder)
+    }
+
+    fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
+        self.1
+            .as_ref()
+            .map(|pattern| pattern.span)
+            .unwrap_or(self.0.span)
             .end_line_index(builder)
     }
 }
@@ -596,8 +615,29 @@ impl<'code> DocumentBuilder<'code> {
                 ]);
                 self.list(list)
             }
-            ast::TypeDeclKind::Alias(_) => {
-                self.unsupported(type_declaration, "type aliases")
+            // The alias parser eats its own `;`, so the printed one
+            // belongs here in both item and statement position.
+            ast::TypeDeclKind::Alias(alias) => {
+                let mut list =
+                    vec![self.build_attribute_list(&alias.attributes, true)];
+                list.extend(visibility);
+                list.push(self.text("type "));
+                list.push(self.text(alias.name.to_string()));
+                if let Some(generic_args) = &type_declaration.generic_args {
+                    list.push(self.group(
+                        token::TokenKind::Lt.as_str(),
+                        &generic_args.inner,
+                        token::TokenKind::Comma,
+                        token::TokenKind::Gt.as_str(),
+                        comment_inserter,
+                    ));
+                }
+                list.extend([
+                    self.text(" = "),
+                    self.build_type_spec(&alias.type_spec, comment_inserter),
+                    self.token(token::TokenKind::Semi),
+                ]);
+                self.list(list)
             }
         }
     }
@@ -1572,9 +1612,13 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
-            ast::Pattern::Array(_) => {
-                self.unsupported(pattern, "array patterns")
-            }
+            ast::Pattern::Array(elements) => self.group(
+                token::TokenKind::OpenBracket.as_str(),
+                elements,
+                token::TokenKind::Comma,
+                token::TokenKind::CloseBracket.as_str(),
+                comment_inserter,
+            ),
             ast::Pattern::Type(name, argument_pattern) => self.list([
                 self.build_path(name),
                 self.build_argument_pattern(argument_pattern, comment_inserter),
@@ -1588,9 +1632,13 @@ impl<'code> DocumentBuilder<'code> {
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
         match &**argument_pattern {
-            ast::ArgumentPattern::Named(_) => {
-                self.unsupported(argument_pattern, "named argument patterns")
-            }
+            ast::ArgumentPattern::Named(arguments) => self.group(
+                "$(",
+                arguments,
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
+                comment_inserter,
+            ),
             ast::ArgumentPattern::Positional(tuple) => self.group(
                 token::TokenKind::OpenParen.as_str(),
                 tuple,
@@ -1598,6 +1646,20 @@ impl<'code> DocumentBuilder<'code> {
                 token::TokenKind::CloseParen.as_str(),
                 comment_inserter,
             ),
+        }
+    }
+
+    pub fn build_named_pattern_argument(
+        &self,
+        argument: &AstNamedPatternArgument,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        match &argument.1 {
+            Some(pattern) => self.list([
+                self.text(format!("{}: ", argument.0)),
+                self.build_pattern(pattern, comment_inserter),
+            ]),
+            None => self.text(argument.0.to_string()),
         }
     }
 
@@ -1668,8 +1730,17 @@ impl<'code> DocumentBuilder<'code> {
                 self.text("&"),
                 self.build_type_expression(inner, comment_inserter),
             ]),
-            ast::TypeSpec::Impl(_) => {
-                self.unsupported(type_spec, "`impl` trait types")
+            ast::TypeSpec::Impl(traits) => {
+                let mut list = vec![self.text("impl ")];
+                for (i, trait_spec) in traits.iter().enumerate() {
+                    if i > 0 {
+                        list.push(self.text(" + "));
+                    }
+                    list.push(
+                        self.build_trait_spec(trait_spec, comment_inserter),
+                    );
+                }
+                self.list(list)
             }
             ast::TypeSpec::Wildcard => self.text("_"),
         }

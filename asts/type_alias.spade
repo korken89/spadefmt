@@ -1,0 +1,11 @@
+type Foo = bool;
+
+pub type Pair<T> = (T, T);
+
+/// A documented alias.
+type Byte = int<8>;
+
+fn f() -> bool {
+    type Local = bool;
+    true
+}

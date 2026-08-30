@@ -1,6 +1,5 @@
-fn f(x: [bool; 2]) -> bool {
-    let [a, b] = x;
+fn f(x: bool) -> bool {
     #[no_mangle]
-    let y = a;
-    y
+    let y = x;
+    m!()
 }

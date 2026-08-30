@@ -52,14 +52,12 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 /// here. `swim-templates/` entries are only asserted when the submodule is
 /// initialized.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "unsupported/array_pattern.spade",
     "unsupported/assoc_type.spade",
     "unsupported/binding_attr.spade",
     "unsupported/deprecated_attr.spade",
     "unsupported/external_mod.spade",
     "unsupported/fn_trait_sugar.spade",
     "unsupported/fsm_attr.spade",
-    "unsupported/impl_trait_type.spade",
     "unsupported/impl_where.spade",
     "unsupported/incomplete_expr.spade",
     "unsupported/macro_call.spade",
@@ -68,11 +66,9 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/mod_inner_doc.spade",
     "unsupported/module_doc.spade",
     "unsupported/multiple.spade",
-    "unsupported/named_arg_pattern.spade",
     "unsupported/optimize_attr.spade",
     "unsupported/surfer_translator_attr.spade",
     "unsupported/trait_def.spade",
-    "unsupported/type_alias.spade",
     "unsupported/use_braces.spade",
     "unsupported/variant_attr.spade",
     "unsupported/verilog_attrs.spade",
@@ -469,8 +465,8 @@ fn unsupported_diagnostics_are_collected() {
         )
     };
     for expected in [
-        "array patterns",
         "attributes or documentation on `let` bindings",
+        "macro invocations",
     ] {
         assert!(
             diagnostics.contains(expected),
