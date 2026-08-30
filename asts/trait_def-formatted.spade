@@ -1,0 +1,10 @@
+trait Simple {
+    fn f(self) -> bool;
+}
+
+pub trait Full<T>: Simple + Other where T: Simple {
+    type Assoc;
+    type Generic<U>;
+    fn g(self, x: T) -> bool;
+    entity e(self) -> bool;
+}

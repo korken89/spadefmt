@@ -260,13 +260,6 @@ fn unary_operator_str(op: &ast::UnaryOperator) -> &'static str {
     }
 }
 
-fn where_clause_target(clause: &ast::WhereClause) -> &Loc<Path> {
-    match clause {
-        ast::WhereClause::GenericInt { target, .. }
-        | ast::WhereClause::TraitBounds { target, .. } => target,
-    }
-}
-
 fn span_of_item(item: &ast::Item) -> Span {
     match item {
         spade_ast::Item::Unit(unit) => unit.span,
@@ -421,19 +414,28 @@ impl<'code> DocumentBuilder<'code> {
                 self.unsupported(macro_def, "macro definitions")
             }
             ast::Item::TraitDef(trait_definition) => {
-                self.unsupported(trait_definition, "trait definitions")
+                self.build_trait_def(trait_definition, comment_inserter)
             }
             ast::Item::Type(type_declaration) => {
                 self.build_type_declaration(type_declaration, comment_inserter)
             }
             ast::Item::ExternalMod(external_module) => {
-                self.unsupported(external_module, "external modules")
+                let mut list =
+                    vec![self.build_attribute_list(
+                        &external_module.attributes,
+                        true,
+                    )];
+                list.extend(
+                    self.visibility_prefix(&external_module.visibility),
+                );
+                list.push(self.text(format!("mod {};", external_module.name)));
+                self.list(list)
             }
             ast::Item::Module(module) => {
                 self.build_module(module, comment_inserter)
             }
             ast::Item::Use(attributes, use_statements) => {
-                self.build_use(attributes, use_statements)
+                self.build_use(attributes, use_statements, comment_inserter)
             }
             ast::Item::ImplBlock(impl_block) => {
                 self.build_impl_block(impl_block, comment_inserter)
@@ -446,22 +448,39 @@ impl<'code> DocumentBuilder<'code> {
         unit: &Loc<ast::Unit>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
+        let mut list = vec![self.build_unit_head(&unit.head, comment_inserter)];
+
+        list.push(match &unit.body {
+            Some(body) => self.list([
+                self.text(" "),
+                self.build_expression(body, comment_inserter),
+            ]),
+            None => self.text(";"),
+        });
+
+        self.list(list)
+    }
+
+    pub fn build_unit_head(
+        &self,
+        head: &ast::UnitHead,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
         let mut list = vec![];
 
-        list.push(self.build_attribute_list(&unit.head.attributes, true));
+        list.push(self.build_attribute_list(&head.attributes, true));
 
-        if let Some(visibility) = self.visibility_prefix(&unit.head.visibility)
-        {
+        if let Some(visibility) = self.visibility_prefix(&head.visibility) {
             list.push(visibility);
         }
-        if unit.head.unsafe_token.is_some() {
+        if head.unsafe_token.is_some() {
             list.push(self.text("unsafe "));
         }
-        if unit.head.extern_token.is_some() {
+        if head.extern_token.is_some() {
             list.push(self.text("extern "));
         }
 
-        list.push(match &*unit.head.unit_kind {
+        list.push(match &*head.unit_kind {
             ast::UnitKind::Function => self.text("fn"),
             ast::UnitKind::Entity => self.text("entity"),
             ast::UnitKind::Pipeline(depth) => self.list([
@@ -471,9 +490,9 @@ impl<'code> DocumentBuilder<'code> {
             ]),
         });
 
-        list.push(self.text(format!(" {}", unit.head.name)));
+        list.push(self.text(format!(" {}", head.name)));
 
-        if let Some(type_params) = &unit.head.type_params {
+        if let Some(type_params) = &head.type_params {
             list.push(self.group(
                 token::TokenKind::Lt.as_str(),
                 &type_params.inner,
@@ -484,19 +503,19 @@ impl<'code> DocumentBuilder<'code> {
         }
 
         let parameter_list_doc =
-            self.build_parameter_list(&unit.head.inputs, comment_inserter);
+            self.build_parameter_list(&head.inputs, comment_inserter);
         let parameter_open = self.token(token::TokenKind::OpenParen);
         let parameter_close = self.token(token::TokenKind::CloseParen);
 
-        let output_type_doc =
-            if let Some((_, output_type)) = &unit.head.output_type {
-                self.list([
-                    self.text(" -> "),
-                    self.build_type_spec(output_type, comment_inserter),
-                ])
-            } else {
-                self.list([])
-            };
+        let output_type_doc = if let Some((_, output_type)) = &head.output_type
+        {
+            self.list([
+                self.text(" -> "),
+                self.build_type_spec(output_type, comment_inserter),
+            ])
+        } else {
+            self.list([])
+        };
 
         list.push(self.try_catch(
             self.list([
@@ -521,21 +540,63 @@ impl<'code> DocumentBuilder<'code> {
             ),
         ));
 
-        if let Some(clause) = unit.head.where_clauses.first() {
-            self.record_unsupported(
-                where_clause_target(clause),
-                "`where` clauses",
-            );
+        list.push(
+            self.build_where_clauses(&head.where_clauses, comment_inserter),
+        );
+
+        self.list(list)
+    }
+
+    /// ` where ...` with a leading space, or an empty document when there
+    /// are no clauses.
+    pub fn build_where_clauses(
+        &self,
+        clauses: &[ast::WhereClause],
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let mut list = vec![];
+        for (i, clause) in clauses.iter().enumerate() {
+            list.push(self.text(if i == 0 { " where " } else { ", " }));
+            match clause {
+                ast::WhereClause::TraitBounds { target, traits } => {
+                    list.push(self.build_path(target));
+                    list.push(self.text(": "));
+                    for (j, trait_spec) in traits.iter().enumerate() {
+                        if j > 0 {
+                            list.push(self.text(" + "));
+                        }
+                        list.push(
+                            self.build_trait_spec(trait_spec, comment_inserter),
+                        );
+                    }
+                }
+                // The grandfathered `N: { expr }` syntax parses to the
+                // same AST as `N == expr` and prints as the latter.
+                ast::WhereClause::GenericInt {
+                    target,
+                    kind,
+                    expression,
+                    if_unsatisfied,
+                } => {
+                    let operator = match kind {
+                        ast::Inequality::Eq => "==",
+                        ast::Inequality::Neq => "!=",
+                        ast::Inequality::Lt => "<",
+                        ast::Inequality::Leq => "<=",
+                        ast::Inequality::Gt => ">",
+                        ast::Inequality::Geq => ">=",
+                    };
+                    list.push(self.build_path(target));
+                    list.push(self.text(format!(" {operator} ")));
+                    list.push(
+                        self.build_expression(expression, comment_inserter),
+                    );
+                    if let Some(message) = if_unsatisfied {
+                        list.push(self.text(format!(" else \"{message}\"")));
+                    }
+                }
+            }
         }
-
-        list.push(match &unit.body {
-            Some(body) => self.list([
-                self.text(" "),
-                self.build_expression(body, comment_inserter),
-            ]),
-            None => self.text(";"),
-        });
-
         self.list(list)
     }
 
@@ -751,27 +812,83 @@ impl<'code> DocumentBuilder<'code> {
         &self,
         attributes: &ast::AttributeList,
         use_statements: &Loc<Vec<ast::UseStatement>>,
+        comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        // `use a::{b, c}` expands to several statements whose brace tree
-        // cannot be reconstructed from the AST alone yet.
-        let [use_statement] = use_statements.inner.as_slice() else {
-            return self
-                .unsupported(use_statements, "`use` statements with braces");
-        };
-        let ast::UseStatement {
-            visibility,
-            path,
-            alias,
-        } = use_statement;
+        if let [use_statement] = use_statements.inner.as_slice() {
+            let ast::UseStatement {
+                visibility,
+                path,
+                alias,
+            } = use_statement;
 
-        let mut line = vec![self.build_attribute_list(attributes, true)];
-        line.extend(self.visibility_prefix(visibility));
-        line.extend([self.text("use "), self.build_path(path)]);
+            let mut line = vec![self.build_attribute_list(attributes, true)];
+            line.extend(self.visibility_prefix(visibility));
+            line.extend([self.text("use "), self.build_path(path)]);
 
-        if let Some(alias) = alias {
-            line.push(self.text(format!(" as {alias}")));
+            if let Some(alias) = alias {
+                line.push(self.text(format!(" as {alias}")));
+            }
+
+            line.push(self.text(";"));
+            return self.list(line);
         }
 
+        // The parser flattens the brace tree of `use a::{b, c::d};` into
+        // one statement per leaf; reconstruct one-level braces over the
+        // longest common path prefix, capped so every statement keeps at
+        // least one segment. Visibility is uniform across the group.
+        let statements = &use_statements.inner;
+        let first = &statements[0];
+        let mut prefix_len = statements
+            .iter()
+            .map(|statement| statement.path.0.len() - 1)
+            .min()
+            .unwrap_or(0);
+        for statement in &statements[1..] {
+            let common = first
+                .path
+                .0
+                .iter()
+                .zip(statement.path.0.iter())
+                .take_while(|(a, b)| a.to_string() == b.to_string())
+                .count();
+            prefix_len = prefix_len.min(common);
+        }
+
+        let segment_text = |segments: &[spade_common::name::PathSegment]| {
+            segments
+                .iter()
+                .map(|segment| segment.to_string())
+                .collect::<Vec<_>>()
+                .join("::")
+        };
+
+        let mut line = vec![self.build_attribute_list(attributes, true)];
+        line.extend(self.visibility_prefix(&first.visibility));
+        line.push(self.text("use "));
+        if prefix_len > 0 {
+            line.push(self.text(format!(
+                "{}::",
+                segment_text(&first.path.0[..prefix_len])
+            )));
+        }
+        let entries = statements
+            .iter()
+            .map(|statement| {
+                let mut entry = segment_text(&statement.path.0[prefix_len..]);
+                if let Some(alias) = &statement.alias {
+                    entry.push_str(&format!(" as {alias}"));
+                }
+                self.text(entry).at_loc(&statement.path)
+            })
+            .collect::<Vec<_>>();
+        line.push(self.group(
+            token::TokenKind::OpenBrace.as_str(),
+            &entries,
+            token::TokenKind::Comma,
+            token::TokenKind::CloseBrace.as_str(),
+            comment_inserter,
+        ));
         line.push(self.text(";"));
         self.list(line)
     }
@@ -799,31 +916,100 @@ impl<'code> DocumentBuilder<'code> {
             ]);
         }
         list.push(self.build_type_spec(&impl_block.target, comment_inserter));
-
-        if let Some(clause) = impl_block.where_clauses.first() {
-            self.record_unsupported(
-                where_clause_target(clause),
-                "`where` clauses",
-            );
-        }
-        if let Some(assoc_type) = impl_block.assoc_types.first() {
-            self.record_unsupported(
-                assoc_type,
-                "associated types in `impl` blocks",
-            );
-        }
+        list.push(
+            self.build_where_clauses(
+                &impl_block.where_clauses,
+                comment_inserter,
+            ),
+        );
 
         list.push(self.text(" {"));
-        if !impl_block.units.is_empty() {
+        if !impl_block.units.is_empty() || !impl_block.assoc_types.is_empty() {
             list.push(self.newline());
-            let mut unit_list = vec![];
-            for (i, unit) in impl_block.units.iter().enumerate() {
+            let mut member_list = vec![];
+            for (i, assoc_type) in impl_block.assoc_types.iter().enumerate() {
                 if i > 0 {
-                    unit_list.push(self.newline());
+                    member_list.push(self.newline());
                 }
-                unit_list.push(self.build_unit(unit, comment_inserter))
+                member_list.push(
+                    self.build_type_declaration(assoc_type, comment_inserter),
+                );
             }
-            list.push(self.nest(self.list(unit_list), self.indent));
+            for (i, unit) in impl_block.units.iter().enumerate() {
+                if i > 0 || !impl_block.assoc_types.is_empty() {
+                    member_list.push(self.newline());
+                }
+                member_list.push(self.build_unit(unit, comment_inserter))
+            }
+            list.push(self.nest(self.list(member_list), self.indent));
+            list.push(self.newline());
+        }
+        list.push(self.text("}"));
+
+        self.list(list)
+    }
+
+    pub fn build_trait_def(
+        &self,
+        trait_def: &Loc<ast::TraitDef>,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let mut list =
+            vec![self.build_attribute_list(&trait_def.attributes, true)];
+        list.extend(self.visibility_prefix(&trait_def.visibility));
+        list.push(self.text(format!("trait {}", trait_def.name)));
+        if let Some(type_params) = &trait_def.type_params {
+            list.push(self.group(
+                token::TokenKind::Lt.as_str(),
+                &type_params.inner,
+                token::TokenKind::Comma,
+                token::TokenKind::Gt.as_str(),
+                comment_inserter,
+            ));
+        }
+        for (i, subtrait) in trait_def.subtraits.iter().enumerate() {
+            list.push(self.text(if i == 0 { ": " } else { " + " }));
+            list.push(self.build_trait_spec(subtrait, comment_inserter));
+        }
+        list.push(
+            self.build_where_clauses(
+                &trait_def.where_clauses,
+                comment_inserter,
+            ),
+        );
+
+        list.push(self.text(" {"));
+        if !trait_def.methods.is_empty() || !trait_def.assoc_types.is_empty() {
+            list.push(self.newline());
+            let mut member_list = vec![];
+            // The AST stores associated types and methods separately, so
+            // source interleaving is lost; associated types print first.
+            for (i, assoc_type) in trait_def.assoc_types.iter().enumerate() {
+                if i > 0 {
+                    member_list.push(self.newline());
+                }
+                member_list
+                    .push(self.text(format!("type {}", assoc_type.name)));
+                if let Some(type_params) = &assoc_type.type_params {
+                    member_list.push(self.group(
+                        token::TokenKind::Lt.as_str(),
+                        &type_params.inner,
+                        token::TokenKind::Comma,
+                        token::TokenKind::Gt.as_str(),
+                        comment_inserter,
+                    ));
+                }
+                member_list.push(self.token(token::TokenKind::Semi));
+            }
+            for (i, method) in trait_def.methods.iter().enumerate() {
+                if i > 0 || !trait_def.assoc_types.is_empty() {
+                    member_list.push(self.newline());
+                }
+                member_list
+                    .push(self.build_unit_head(method, comment_inserter));
+                member_list.push(self.token(token::TokenKind::Semi));
+            }
+            list.push(self.nest(self.list(member_list), self.indent));
             list.push(self.newline());
         }
         list.push(self.text("}"));

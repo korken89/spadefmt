@@ -1,0 +1,5 @@
+use std::ports::{new_mut_wire, read_mut_wire};
+
+use a::{b as x, c};
+
+use a::{b::c, b::d, e};

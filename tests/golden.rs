@@ -52,13 +52,10 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 /// here. `swim-templates/` entries are only asserted when the submodule is
 /// initialized.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "unsupported/assoc_type.spade",
     "unsupported/binding_attr.spade",
     "unsupported/deprecated_attr.spade",
-    "unsupported/external_mod.spade",
     "unsupported/fn_trait_sugar.spade",
     "unsupported/fsm_attr.spade",
-    "unsupported/impl_where.spade",
     "unsupported/incomplete_expr.spade",
     "unsupported/macro_call.spade",
     "unsupported/macro_def.spade",
@@ -68,11 +65,8 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/multiple.spade",
     "unsupported/optimize_attr.spade",
     "unsupported/surfer_translator_attr.spade",
-    "unsupported/trait_def.spade",
-    "unsupported/use_braces.spade",
     "unsupported/variant_attr.spade",
     "unsupported/verilog_attrs.spade",
-    "unsupported/where_clause.spade",
 ];
 
 const BLESS_HINT: &str =

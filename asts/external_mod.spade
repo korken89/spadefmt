@@ -1,0 +1,6 @@
+mod foo;
+
+pub mod bar;
+
+/// A documented module.
+mod baz;

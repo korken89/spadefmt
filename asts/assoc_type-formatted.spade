@@ -1,0 +1,6 @@
+impl Foo for bool {
+    type T = bool;
+    fn f(self) -> bool {
+        true
+    }
+}

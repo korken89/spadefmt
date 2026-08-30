@@ -1,0 +1,5 @@
+impl<T> Foo for T where T: Copy {
+    fn f(self) -> bool {
+        true
+    }
+}

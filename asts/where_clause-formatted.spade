@@ -1,0 +1,15 @@
+fn f<T>(x: T) -> T where T: Copy {
+    x
+}
+
+fn g<T>(x: T) -> T where T: Copy + Clone {
+    x
+}
+
+fn h<#uint N>(x: bool) -> bool where N == 8 {
+    x
+}
+
+fn i<#uint N>(x: bool) -> bool where N > 2, N <= 8 else "N out of range" {
+    x
+}

@@ -1,3 +1,0 @@
-fn f<T>(x: T) -> T where T: Copy {
-    x
-}
