@@ -39,8 +39,7 @@ use spadefmt::{
 
 /// Inputs that `format` does not yet map to a fixed point. Steps fixing
 /// comment attachment and blank-line preservation shrink this list.
-const KNOWN_NON_IDEMPOTENT: &[&str] =
-    &["keepemptylines.spade", "rv.spade", "test4.spade"];
+const KNOWN_NON_IDEMPOTENT: &[&str] = &["keepemptylines.spade"];
 
 /// Files (relative to `asts/`) containing constructs the document builder
 /// reports as unsupported. Implementing a construct moves its

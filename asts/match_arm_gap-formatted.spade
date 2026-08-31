@@ -1,0 +1,21 @@
+fn wide(state: State) -> bool {
+    match state {
+        State::A => a_very_long_function_name(
+            first_argument,
+            second_argument,
+            third,
+        ),
+        State::B => false,
+
+        State::C => true,
+    }
+}
+
+fn narrow(state: State) -> bool {
+    match state {
+        State::A => f(1, 2),
+        State::B => quite_a_long_expression_here(argument_one, argument_two),
+
+        State::C => true,
+    }
+}

@@ -1,0 +1,12 @@
+fn build(x: bool) -> Triple {
+    Triple$(
+        first: make_a_wide_value(
+            first_argument,
+            second_argument,
+            third_argument,
+        ),
+        second: x,
+
+        third: x,
+    )
+}

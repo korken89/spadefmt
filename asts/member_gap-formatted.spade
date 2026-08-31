@@ -1,0 +1,19 @@
+impl Thing {
+    fn one(self) -> bool {
+        true
+    }
+
+    fn two(self) -> bool {
+        false
+    }
+    fn three(self) -> bool {
+        true
+    }
+}
+
+trait Behavior {
+    fn one(self) -> bool;
+    fn two(self) -> bool;
+
+    fn three(self) -> bool;
+}

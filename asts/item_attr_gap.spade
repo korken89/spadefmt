@@ -1,0 +1,17 @@
+/// A documented item.
+fn first(x: bool) -> bool {
+    x
+}
+#[no_mangle]
+fn second(x: bool) -> bool {
+    x
+}
+/// A documented type, directly adjacent.
+struct Point {
+    x: uint<8>,
+}
+
+/// A documented item after one blank line.
+fn third(x: bool) -> bool {
+    x
+}

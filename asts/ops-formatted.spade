@@ -6,6 +6,7 @@ impl Ops {
     fn by_ref(&self) -> bool {
         true
     }
+
     fn by_wire(wire self, a: bool, b: bool) -> bool {
         let l1 = a && b;
         let l2 = a || b;

@@ -1,0 +1,9 @@
+enum Wide {
+    First {
+        a_rather_long_member_name: uint<32>,
+        another_rather_long_member_name: uint<32>,
+    },
+    Second,
+
+    Third,
+}

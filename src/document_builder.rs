@@ -152,7 +152,11 @@ impl HasLineNumber for ast::EnumVariant {
     }
 
     fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
-        self.name.end_line_index(builder)
+        self.args
+            .as_ref()
+            .map(|args| args.span)
+            .unwrap_or(self.name.span)
+            .end_line_index(builder)
     }
 }
 
@@ -166,8 +170,8 @@ impl HasLineNumber for ast::NamedArgument {
 
     fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
         match self {
-            ast::NamedArgument::Full(name, _)
-            | ast::NamedArgument::Short(name) => name.end_line_index(builder),
+            ast::NamedArgument::Full(_, value) => value.end_line_index(builder),
+            ast::NamedArgument::Short(name) => name.end_line_index(builder),
         }
     }
 }
@@ -178,6 +182,7 @@ impl HasLineNumber for AstParameter {
             .0
             .first()
             .map(|first| first.span)
+            .or_else(|| self.1.as_ref().map(|wire| wire.span))
             .unwrap_or(self.2.span)
             .line_index(builder)
     }
@@ -260,17 +265,70 @@ fn unary_operator_str(op: &ast::UnaryOperator) -> &'static str {
     }
 }
 
+/// Extends `span` back over the construct's attributes and docs; the
+/// parser starts every item and statement span at the keyword, after them.
+fn attributed_span(attributes: &ast::AttributeList, span: Span) -> Span {
+    attributes
+        .0
+        .first()
+        .map(|first| first.span.merge(span))
+        .unwrap_or(span)
+}
+
+fn type_declaration_attributes(
+    type_declaration: &ast::TypeDeclaration,
+) -> &ast::AttributeList {
+    match &type_declaration.kind {
+        ast::TypeDeclKind::Enum(enum_decl) => &enum_decl.attributes,
+        ast::TypeDeclKind::Struct(struct_decl) => &struct_decl.attributes,
+        ast::TypeDeclKind::Alias(alias) => &alias.attributes,
+    }
+}
+
 fn span_of_item(item: &ast::Item) -> Span {
     match item {
-        spade_ast::Item::Unit(unit) => unit.span,
-        spade_ast::Item::MacroDef(macro_def) => macro_def.span,
-        spade_ast::Item::TraitDef(trait_definition) => trait_definition.span,
-        spade_ast::Item::Type(ty) => ty.span,
-        spade_ast::Item::ExternalMod(external_module) => external_module.span,
-        spade_ast::Item::Module(module) => module.span,
-        spade_ast::Item::Use(_, use_) => use_.span,
+        spade_ast::Item::Unit(unit) => {
+            attributed_span(&unit.head.attributes, unit.span)
+        }
+        spade_ast::Item::MacroDef(macro_def) => {
+            attributed_span(&macro_def.attributes, macro_def.span)
+        }
+        spade_ast::Item::TraitDef(trait_definition) => {
+            attributed_span(&trait_definition.attributes, trait_definition.span)
+        }
+        spade_ast::Item::Type(ty) => {
+            attributed_span(type_declaration_attributes(ty), ty.span)
+        }
+        spade_ast::Item::ExternalMod(external_module) => {
+            attributed_span(&external_module.attributes, external_module.span)
+        }
+        spade_ast::Item::Module(module) => {
+            attributed_span(&module.attributes, module.span)
+        }
+        spade_ast::Item::Use(attributes, use_) => {
+            attributed_span(attributes, use_.span)
+        }
         spade_ast::Item::ImplBlock(impl_block) => impl_block.span,
     }
+}
+
+fn span_of_statement(statement: &Loc<ast::Statement>) -> Span {
+    let attributes = match &**statement {
+        ast::Statement::Binding(binding) => Some(&binding.attrs),
+        ast::Statement::Register(register) => Some(&register.attributes),
+        ast::Statement::Expression(_, attributes) => Some(attributes),
+        ast::Statement::Type(type_declaration) => {
+            Some(type_declaration_attributes(type_declaration))
+        }
+        ast::Statement::Label(_)
+        | ast::Statement::Declaration(_)
+        | ast::Statement::PipelineRegMarker(..)
+        | ast::Statement::Set { .. }
+        | ast::Statement::Assert(_) => None,
+    };
+    attributes
+        .map(|attributes| attributed_span(attributes, statement.span))
+        .unwrap_or(statement.span)
 }
 
 impl<'code> DocumentBuilder<'code> {
@@ -940,7 +998,11 @@ impl<'code> DocumentBuilder<'code> {
                 if let Some(alias) = &statement.alias {
                     entry.push_str(&format!(" as {alias}"));
                 }
-                self.text(entry).at_loc(&statement.path)
+                let doc = self.text(entry);
+                match &statement.alias {
+                    Some(alias) => doc.between_locs(&statement.path, alias),
+                    None => doc.at_loc(&statement.path),
+                }
             })
             .collect::<Vec<_>>();
         line.push(self.group(
@@ -988,19 +1050,33 @@ impl<'code> DocumentBuilder<'code> {
         if !impl_block.units.is_empty() || !impl_block.assoc_types.is_empty() {
             list.push(self.newline());
             let mut member_list = vec![];
-            for (i, assoc_type) in impl_block.assoc_types.iter().enumerate() {
-                if i > 0 {
+            let mut last_end_line_index = None;
+            for assoc_type in &impl_block.assoc_types {
+                let span = attributed_span(
+                    type_declaration_attributes(assoc_type),
+                    assoc_type.span,
+                );
+                if let Some(last) = last_end_line_index {
+                    if last + 1 < span.line_index(self) {
+                        member_list.push(self.newline());
+                    }
                     member_list.push(self.newline());
                 }
                 member_list.push(
                     self.build_type_declaration(assoc_type, comment_inserter),
                 );
+                last_end_line_index = Some(span.end_line_index(self));
             }
-            for (i, unit) in impl_block.units.iter().enumerate() {
-                if i > 0 || !impl_block.assoc_types.is_empty() {
+            for unit in &impl_block.units {
+                let span = attributed_span(&unit.head.attributes, unit.span);
+                if let Some(last) = last_end_line_index {
+                    if last + 1 < span.line_index(self) {
+                        member_list.push(self.newline());
+                    }
                     member_list.push(self.newline());
                 }
-                member_list.push(self.build_unit(unit, comment_inserter))
+                member_list.push(self.build_unit(unit, comment_inserter));
+                last_end_line_index = Some(span.end_line_index(self));
             }
             list.push(self.nest(self.list(member_list), self.indent));
             list.push(self.newline());
@@ -1043,10 +1119,14 @@ impl<'code> DocumentBuilder<'code> {
         if !trait_def.methods.is_empty() || !trait_def.assoc_types.is_empty() {
             list.push(self.newline());
             let mut member_list = vec![];
+            let mut last_end_line_index = None;
             // The AST stores associated types and methods separately, so
             // source interleaving is lost; associated types print first.
-            for (i, assoc_type) in trait_def.assoc_types.iter().enumerate() {
-                if i > 0 {
+            for assoc_type in &trait_def.assoc_types {
+                if let Some(last) = last_end_line_index {
+                    if last + 1 < assoc_type.line_index(self) {
+                        member_list.push(self.newline());
+                    }
                     member_list.push(self.newline());
                 }
                 member_list
@@ -1061,14 +1141,20 @@ impl<'code> DocumentBuilder<'code> {
                     ));
                 }
                 member_list.push(self.token(token::TokenKind::Semi));
+                last_end_line_index = Some(assoc_type.end_line_index(self));
             }
-            for (i, method) in trait_def.methods.iter().enumerate() {
-                if i > 0 || !trait_def.assoc_types.is_empty() {
+            for method in &trait_def.methods {
+                let span = attributed_span(&method.attributes, method.span);
+                if let Some(last) = last_end_line_index {
+                    if last + 1 < span.line_index(self) {
+                        member_list.push(self.newline());
+                    }
                     member_list.push(self.newline());
                 }
                 member_list
                     .push(self.build_unit_head(method, comment_inserter));
                 member_list.push(self.token(token::TokenKind::Semi));
+                last_end_line_index = Some(span.end_line_index(self));
             }
             list.push(self.nest(self.list(member_list), self.indent));
             list.push(self.newline());
@@ -1231,7 +1317,7 @@ impl<'code> DocumentBuilder<'code> {
 
         let end_of_statement_comments = self.pull_comments(
             comment_inserter,
-            statement.line_index(self),
+            span_of_statement(statement).line_index(self),
             statement.end_line_index(self) + 1,
             false,
             None,
@@ -1470,7 +1556,7 @@ impl<'code> DocumentBuilder<'code> {
                                     self.list([pattern, case]),
                                 ),
                             )
-                            .at_loc(&arm.0),
+                            .between_locs(&arm.0, &arm.2),
                         );
                     }
 
@@ -1694,7 +1780,8 @@ impl<'code> DocumentBuilder<'code> {
 
             let mut last_line_index = start_line_index;
             for (i, statement) in block.statements.iter().enumerate() {
-                let item_line_index = statement.line_index(self);
+                let statement_span = span_of_statement(statement);
+                let item_line_index = statement_span.line_index(self);
 
                 nest.extend(self.pull_comments(
                     comment_inserter,
@@ -1709,7 +1796,7 @@ impl<'code> DocumentBuilder<'code> {
                 }
                 nest.push(self.build_statement(statement, comment_inserter));
                 nest.push(self.newline());
-                last_line_index = statement.end_line_index(self);
+                last_line_index = statement_span.end_line_index(self);
             }
 
             // Stop at the result: a comment inside its span (a verbatim

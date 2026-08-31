@@ -1,0 +1,11 @@
+entity e(clk: clock, x: bool) -> bool {
+    let a = x;
+    #[no_mangle]
+    let b = a;
+    /// A documented register, directly adjacent.
+    reg(clk) c = b;
+
+    /// A documented binding after one blank line.
+    let d = c;
+    d
+}

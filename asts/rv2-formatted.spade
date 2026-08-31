@@ -19,7 +19,6 @@ impl<T> Rv<T> {
 
         reg(clk) value reset(rst: None) = match (value, *self.data) {
             (Some(_), _) => if inst read_mut_wire(ds) { None } else { value },
-
             (None, Some(new)) => Some(new),
             (None, None) => None,
         };
@@ -28,6 +27,7 @@ impl<T> Rv<T> {
 
         Rv$(data: &value, ready: ds)
     }
+
     /// Buffers the values using a FIFO, which can be used to cross clock domains.
     entity fifo_buffer<
         #uint Depth,
@@ -49,9 +49,11 @@ impl<T> Rv<T> {
             read_rst,
         )
     }
+
     entity terminate_unready(self) {
         set self.ready = &false;
     }
+
     entity terminate_ready(self) {
         set self.ready = &true;
     }
