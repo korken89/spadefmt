@@ -160,6 +160,11 @@ pub fn resolve_try_catch(
             }
         }
         Document::Raw(raw) => {
+            // A raw with a newline cannot sit on one line, so it taints
+            // any flat attempt.
+            if context.flatten && raw.contains('\n') {
+                context.tainted = true;
+            }
             context.push_raw(
                 raw.rsplit_once('\n')
                     .map(|(_, last_line)| last_line.len())

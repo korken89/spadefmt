@@ -1,0 +1,19 @@
+/// Sums each expression in the list.
+#[no_mangle]
+macro sum($($x:expr),*) {
+    // A comment inside the template.
+    $($x)+*
+}
+
+pub macro visible($v:expr) { $v }
+
+macro empty() {}
+
+macro shapes((a, [b c] $d:ident = $(e $f:g macro);?)) {
+    $d
+}
+
+macro pick {
+    ($x:expr) => { $x },
+    ($x:expr, $y:expr) => { $x + $y },
+}

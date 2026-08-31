@@ -349,6 +349,42 @@ impl<'code> DocumentBuilder<'code> {
         result
     }
 
+    /// The exact source bytes of `span`, printed verbatim. Comments inside
+    /// the span are dropped from `comment_inserter` since their text is
+    /// already part of the slice.
+    fn raw_source_span(
+        &self,
+        span: Span,
+        comment_inserter: &mut CommentInserter,
+    ) -> DocumentIdx {
+        let range = span.start().to_usize()..span.end().to_usize();
+        comment_inserter.discard_range(&range);
+        let file = self.file.borrow().unwrap();
+        let slice = &file.source()[range];
+        // The writer re-indents after every newline it prints, so a
+        // verbatim slice would gain one indent level per pass. Interior
+        // lines instead drop their common leading spaces here and pick up
+        // the output depth from the writer.
+        let Some((first_line, rest)) = slice.split_once('\n') else {
+            return self.raw_text(slice);
+        };
+        let leading_spaces = |line: &str| -> usize {
+            line.len() - line.trim_start_matches(' ').len()
+        };
+        let dedent = rest
+            .split('\n')
+            .filter(|line| !line.trim().is_empty())
+            .map(leading_spaces)
+            .min()
+            .unwrap_or(0);
+        let mut text = first_line.to_string();
+        for line in rest.split('\n') {
+            text.push('\n');
+            text.push_str(&line[dedent.min(leading_spaces(line))..]);
+        }
+        self.raw_text(text)
+    }
+
     pub fn build_root(
         self,
         root: &Loc<ast::ModuleBody>,
@@ -414,8 +450,19 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match item {
             ast::Item::Unit(unit) => self.build_unit(unit, comment_inserter),
+            // Macro bodies are raw token streams the lexer has already
+            // mangled (lexemes, spacing, and comments are unrecoverable
+            // from the AST), so the whole construct prints verbatim from
+            // its source span.
             ast::Item::MacroDef(macro_def) => {
-                self.unsupported(macro_def, "macro definitions")
+                let mut list = vec![
+                    self.build_attribute_list(&macro_def.attributes, true),
+                ];
+                list.extend(self.visibility_prefix(&macro_def.visibility));
+                list.push(
+                    self.raw_source_span(macro_def.span, comment_inserter),
+                );
+                self.list(list)
             }
             ast::Item::TraitDef(trait_definition) => {
                 self.build_trait_def(trait_definition, comment_inserter)
@@ -1280,8 +1327,11 @@ impl<'code> DocumentBuilder<'code> {
                 self.build_path(label),
                 self.text(format!(".{field}")),
             ]),
+            // Verbatim like `Item::MacroDef`; the span runs from the
+            // callee path through the closing delimiter, whose kind only
+            // the source records.
             ast::Expression::MacroCall { .. } => {
-                self.unsupported(expression, "macro invocations")
+                self.raw_source_span(expression.span, comment_inserter)
             }
             // The parser recovered around a malformed expression and
             // embedded the real diagnostic in the node instead of pushing
@@ -1662,13 +1712,19 @@ impl<'code> DocumentBuilder<'code> {
                 last_line_index = statement.end_line_index(self);
             }
 
-            nest.extend(self.pull_comments(
-                comment_inserter,
-                last_line_index,
-                end_line_index,
-                true,
-                Some(&mut last_line_index),
-            ));
+            // Stop at the result: a comment inside its span (a verbatim
+            // macro slice) must stay with it, not print above it.
+            nest.extend(
+                self.pull_comments(
+                    comment_inserter,
+                    last_line_index,
+                    block.result.as_ref().map_or(end_line_index, |result| {
+                        result.line_index(self)
+                    }),
+                    true,
+                    Some(&mut last_line_index),
+                ),
+            );
 
             if let Some(result) = &block.result {
                 if last_line_index + 1 < result.line_index(self) {

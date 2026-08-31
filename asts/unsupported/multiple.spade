@@ -1,5 +1,7 @@
-macro m() {}
+fn first(a: bool) -> bool {
+    a.
+}
 
-fn f(x: bool) -> bool {
-    m!()
+fn second(b: bool) -> bool {
+    b.
 }

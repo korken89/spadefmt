@@ -49,8 +49,6 @@ const KNOWN_NON_IDEMPOTENT: &[&str] =
 /// initialized.
 const KNOWN_UNSUPPORTED: &[&str] = &[
     "unsupported/incomplete_expr.spade",
-    "unsupported/macro_call.spade",
-    "unsupported/macro_def.spade",
     "unsupported/multiple.spade",
 ];
 
@@ -428,7 +426,9 @@ fn unsupported_fixtures_report_diagnostics() {
     }
 }
 
-/// All unsupported constructs in a file are reported in one run.
+/// All unformattable sites in a file are reported in one run: both
+/// incomplete expressions in `multiple.spade` surface their embedded
+/// parser diagnostic, each located at its own line.
 #[test]
 fn unsupported_diagnostics_are_collected() {
     let config = config();
@@ -443,7 +443,11 @@ fn unsupported_diagnostics_are_collected() {
                 constructs"
         )
     };
-    for expected in ["macro definitions", "macro invocations"] {
+    for expected in [
+        "Expected an identifier after `.`",
+        "unsupported/multiple.spade:3:1",
+        "unsupported/multiple.spade:7:1",
+    ] {
         assert!(
             diagnostics.contains(expected),
             "diagnostics do not mention {expected}:\n{diagnostics}"

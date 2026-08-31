@@ -1,0 +1,18 @@
+fn delimiters(x: int<8>) -> int<8> {
+    let a = paren!(x, x);
+    let b = bracket![x [nested [deep]] x];
+    let c = brace!{x + x};
+    let d = soup!(+ - ,);
+    let e = include!("other.spade");
+    let f = empty!();
+    marker!(a, b);
+    check!(c /* an argument comment */ d)
+}
+
+fn arg_position(x: int<8>) -> int<8> {
+    std::ops::add(x, sum!{
+        1,
+        2,
+        3
+    })
+}

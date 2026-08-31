@@ -11,7 +11,7 @@
 // details. You should have received a copy of the GNU General Public License
 // along with spadefmt. If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::VecDeque, fmt, fmt::Write};
+use std::{collections::VecDeque, fmt, fmt::Write, ops::Range};
 
 use spade_codespan_reporting::files::{Files, SimpleFile};
 use spade_parser::Comment;
@@ -111,6 +111,20 @@ impl<'parser, 'source> CommentInserter<'parser, 'source> {
             result.push(comment);
         }
         result
+    }
+
+    /// Drops every comment lying inside `byte_range`. Used for spans whose
+    /// source prints verbatim: their comment text is already in the slice.
+    pub fn discard_range(&mut self, byte_range: &Range<usize>) {
+        self.comments.retain(|comment| {
+            let span = match comment.inner {
+                Comment::Line(token) => token.span.clone(),
+                Comment::Block(start_token, end_token) => {
+                    start_token.span.start..end_token.span.end
+                }
+            };
+            !(span.start >= byte_range.start && span.end <= byte_range.end)
+        });
     }
 }
 
