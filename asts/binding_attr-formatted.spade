@@ -1,5 +1,8 @@
 fn f(x: bool) -> bool {
     #[no_mangle]
     let y = x;
-    y
+
+    /// The bound value
+    let z = y;
+    z
 }

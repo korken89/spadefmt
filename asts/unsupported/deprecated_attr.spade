@@ -1,4 +1,0 @@
-#[deprecated]
-fn f() -> bool {
-    true
-}

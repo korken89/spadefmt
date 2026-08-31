@@ -1,5 +1,7 @@
 enum E {
     /// The documented variant
     A,
-    B
+    #[no_mangle]
+    B{x: bool},
+    C
 }

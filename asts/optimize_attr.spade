@@ -1,4 +1,4 @@
-#[optimize(flatten)]
+#[optimize(flatten, other)]
 fn f() -> bool {
     true
 }

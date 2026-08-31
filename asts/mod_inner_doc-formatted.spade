@@ -1,0 +1,7 @@
+mod m {
+    //! inner docs
+
+    fn f() -> bool {
+        true
+    }
+}

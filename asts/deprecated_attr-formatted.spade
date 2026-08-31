@@ -1,0 +1,19 @@
+#[deprecated]
+fn a() -> bool {
+    true
+}
+
+#[deprecated = "use a"]
+fn b() -> bool {
+    true
+}
+
+#[deprecated = "use a"]
+fn c() -> bool {
+    true
+}
+
+#[deprecated(since = "1.0", note = "use g")]
+fn d() -> bool {
+    true
+}

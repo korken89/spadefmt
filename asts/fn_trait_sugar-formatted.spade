@@ -1,3 +1,8 @@
 fn apply<F: Fn(bool) -> bool>(f: F, x: bool) -> bool {
     f(x)
 }
+
+fn each<F: Fn(bool)>(f: F, x: bool) -> bool {
+    f(x);
+    x
+}

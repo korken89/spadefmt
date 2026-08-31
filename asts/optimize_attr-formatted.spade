@@ -1,4 +1,4 @@
-#[verilog_attrs(keep)]
+#[optimize(flatten, other)]
 fn f() -> bool {
     true
 }

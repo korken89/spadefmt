@@ -1,5 +1,5 @@
+macro m() {}
+
 fn f(x: bool) -> bool {
-    #[no_mangle]
-    let y = x;
     m!()
 }

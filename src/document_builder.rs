@@ -143,7 +143,12 @@ impl<T> HasLineNumber for Loc<T> {
 
 impl HasLineNumber for ast::EnumVariant {
     fn line_index(&self, builder: &DocumentBuilder) -> usize {
-        self.name.line_index(builder)
+        self.attributes
+            .0
+            .first()
+            .map(|first| first.span)
+            .unwrap_or(self.name.span)
+            .line_index(builder)
     }
 
     fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
@@ -178,12 +183,7 @@ impl HasLineNumber for AstParameter {
     }
 
     fn end_line_index(&self, builder: &DocumentBuilder) -> usize {
-        self.0
-            .0
-            .first()
-            .map(|first| first.span)
-            .unwrap_or(self.2.span)
-            .end_line_index(builder)
+        self.3.span.end_line_index(builder)
     }
 }
 
@@ -357,16 +357,20 @@ impl<'code> DocumentBuilder<'code> {
     ) -> (InternedDocumentStore, DocumentIdx, Vec<Diagnostic>) {
         self.file.replace(Some(file));
 
-        // `//!` docs are tokens, not comments, so the comment inserter
-        // never sees them. They carry no spans; anchor at the file start.
-        if !root.documentation.is_empty() {
-            self.record_unsupported(
-                (Span::new(0, 0), root.file_id),
-                "module documentation (`//!` comments)",
-            );
-        }
-
         let mut list = vec![];
+
+        // `//!` docs are tokens, not comments (the comment inserter never
+        // sees them) and only parse at the top of the body, so printing
+        // them there is exact despite their missing spans.
+        for (i, doc) in root.documentation.iter().enumerate() {
+            if i > 0 {
+                list.push(self.newline());
+            }
+            list.push(self.text(format!("//!{doc}")));
+        }
+        if !root.documentation.is_empty() && !root.members.is_empty() {
+            list.extend([self.newline(), self.newline()]);
+        }
 
         let mut last_line_index = 0;
         for (i, item) in root.members.iter().enumerate() {
@@ -517,28 +521,35 @@ impl<'code> DocumentBuilder<'code> {
             self.list([])
         };
 
-        list.push(self.try_catch(
-            self.list([
-                parameter_open,
-                parameter_list_doc.0,
-                parameter_close,
-                self.flatten(output_type_doc),
-            ]),
+        let broken_parameters = self.list([
+            parameter_open,
+            parameter_list_doc.1,
+            parameter_close,
+            output_type_doc,
+        ]);
+        // A `///` doc renders as a line comment, so a flat layout would
+        // swallow everything after it on the line.
+        list.push(if Self::parameters_have_doc(&head.inputs) {
+            broken_parameters
+        } else {
             self.try_catch(
                 self.list([
                     parameter_open,
                     parameter_list_doc.0,
                     parameter_close,
-                    output_type_doc,
+                    self.flatten(output_type_doc),
                 ]),
-                self.list([
-                    parameter_open,
-                    parameter_list_doc.1,
-                    parameter_close,
-                    output_type_doc,
-                ]),
-            ),
-        ));
+                self.try_catch(
+                    self.list([
+                        parameter_open,
+                        parameter_list_doc.0,
+                        parameter_close,
+                        output_type_doc,
+                    ]),
+                    broken_parameters,
+                ),
+            )
+        });
 
         list.push(
             self.build_where_clauses(&head.where_clauses, comment_inserter),
@@ -708,28 +719,30 @@ impl<'code> DocumentBuilder<'code> {
         variant: &ast::EnumVariant,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        // Variants render inside flattenable groups, where attribute and
-        // doc lines cannot be emitted safely yet.
-        if let Some(attribute) = variant.attributes.0.first() {
-            self.record_unsupported(
-                attribute,
-                "attributes or documentation on enum variants",
-            );
-        }
-        let mut list = vec![self.text(variant.name.to_string())];
+        // Attribute and doc lines are safe here only because the enum arm
+        // always breaks its variant list; restoring the commented-out
+        // flatten try_catch in `build_type_declaration` would need a
+        // docs-present check on variants.
+        let mut list =
+            vec![self.build_attribute_list(&variant.attributes, true)];
+        list.push(self.text(variant.name.to_string()));
         if let Some(parameter_list) = &variant.args {
             let parameter_list_doc =
                 self.build_parameter_list(parameter_list, comment_inserter);
             list.extend([
                 self.text(" {"),
-                self.try_catch(
-                    self.list([
-                        self.text(" "),
-                        parameter_list_doc.0,
-                        self.text(" "),
-                    ]),
-                    parameter_list_doc.1,
-                ),
+                if Self::parameters_have_doc(parameter_list) {
+                    parameter_list_doc.1
+                } else {
+                    self.try_catch(
+                        self.list([
+                            self.text(" "),
+                            parameter_list_doc.0,
+                            self.text(" "),
+                        ]),
+                        parameter_list_doc.1,
+                    )
+                },
                 self.text("}"),
             ]);
         }
@@ -761,18 +774,19 @@ impl<'code> DocumentBuilder<'code> {
         body: &Loc<ast::ModuleBody>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        // The doc strings carry no spans; anchor at the body start.
-        if !body.documentation.is_empty() {
-            self.record_unsupported(
-                (
-                    Span::new(body.span.start(), body.span.start()),
-                    body.file_id,
-                ),
-                "module documentation (`//!` comments)",
-            );
+        let mut list = vec![];
+
+        // See `build_root` for why printing `//!` docs first is exact.
+        for (i, doc) in body.documentation.iter().enumerate() {
+            if i > 0 {
+                list.push(self.newline());
+            }
+            list.push(self.text(format!("//!{doc}")));
+        }
+        if !body.documentation.is_empty() && !body.members.is_empty() {
+            list.extend([self.newline(), self.newline()]);
         }
 
-        let mut list = vec![];
         let mut last_line_index = body.line_index(self);
 
         for (i, item) in body.members.iter().enumerate() {
@@ -1049,13 +1063,8 @@ impl<'code> DocumentBuilder<'code> {
                 true,
             ),
             ast::Statement::Binding(binding) => {
-                if let Some(attribute) = binding.attrs.0.first() {
-                    self.record_unsupported(
-                        attribute,
-                        "attributes or documentation on `let` bindings",
-                    );
-                }
                 let mut list = vec![
+                    self.build_attribute_list(&binding.attrs, true),
                     self.text("let "),
                     self.build_pattern(&binding.pattern, comment_inserter),
                 ];
@@ -2006,13 +2015,59 @@ impl<'code> DocumentBuilder<'code> {
         trait_spec: &Loc<ast::TraitSpec>,
         comment_inserter: &mut CommentInserter,
     ) -> DocumentIdx {
-        // `Fn(T) -> O` sugar arrives desugared; reprinting it as
-        // `Fn<(T), O>` would rewrite the source.
+        // With `paren_syntax`, the parser appended the argument tuple and
+        // the return type as the last two type params (an empty tuple
+        // stands in for a missing `-> O`, so an explicit `-> ()` prints
+        // without the arrow).
         if trait_spec.paren_syntax {
-            return self.unsupported(
-                trait_spec,
-                "parenthesized trait sugar (`Fn(..) -> ..`)",
+            let params = trait_spec
+                .type_params
+                .as_deref()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            // Not producible by the parser; fail soft regardless.
+            let [explicit @ .., args, output] = params else {
+                return self
+                    .unsupported(trait_spec, "this parenthesized trait bound");
+            };
+            let ast::TypeExpression::TypeSpec(args_spec) = &**args else {
+                return self
+                    .unsupported(trait_spec, "this parenthesized trait bound");
+            };
+            let ast::TypeSpec::Tuple(argument_types) = &***args_spec else {
+                return self
+                    .unsupported(trait_spec, "this parenthesized trait bound");
+            };
+            let mut list = vec![self.build_path(&trait_spec.path)];
+            if !explicit.is_empty() {
+                list.push(self.group(
+                    token::TokenKind::Lt.as_str(),
+                    explicit,
+                    token::TokenKind::Comma,
+                    token::TokenKind::Gt.as_str(),
+                    comment_inserter,
+                ));
+            }
+            list.push(self.group(
+                token::TokenKind::OpenParen.as_str(),
+                argument_types,
+                token::TokenKind::Comma,
+                token::TokenKind::CloseParen.as_str(),
+                comment_inserter,
+            ));
+            let output_is_unit = matches!(
+                &**output,
+                ast::TypeExpression::TypeSpec(spec)
+                    if matches!(&***spec, ast::TypeSpec::Tuple(elements)
+                        if elements.is_empty())
             );
+            if !output_is_unit {
+                list.extend([
+                    self.text(" -> "),
+                    self.build_type_expression(output, comment_inserter),
+                ]);
+            }
+            return self.list(list);
         }
         let mut list = vec![self.build_path(&trait_spec.path)];
         if let Some(type_params) = &trait_spec.type_params {
@@ -2032,31 +2087,60 @@ impl<'code> DocumentBuilder<'code> {
         attribute: &Loc<ast::Attribute>,
     ) -> DocumentIdx {
         match &**attribute {
-            ast::Attribute::Optimize { .. } => {
-                self.unsupported(attribute, "the `#[optimize]` attribute")
-            }
+            ast::Attribute::Optimize { passes } => self.text(format!(
+                "#[optimize({})]",
+                passes
+                    .iter()
+                    .map(|pass| pass.inner.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
             ast::Attribute::NoMangle { all } => self.text(format!(
                 "#[no_mangle{}]",
                 if *all { "(all)" } else { "" }
             )),
-            ast::Attribute::Fsm { .. } => {
-                self.unsupported(attribute, "the `#[fsm]` attribute")
-            }
+            ast::Attribute::Fsm { state } => match state {
+                Some(state) => self.text(format!("#[fsm({state})]")),
+                None => self.text("#[fsm]"),
+            },
             ast::Attribute::Documentation { content } => {
                 self.text(format!("///{content}"))
             }
-            ast::Attribute::SurferTranslator(_) => self
-                .unsupported(attribute, "the `#[surfer_translator]` attribute"),
+            ast::Attribute::SurferTranslator(name) => {
+                self.text(format!("#[surfer_translator(\"{name}\")]"))
+            }
             ast::Attribute::SpadecParenSugar => {
                 self.text("#[spadec_paren_sugar]")
             }
             ast::Attribute::Inline => self.text("#[inline]"),
-            ast::Attribute::Deprecated { .. } => {
-                self.unsupported(attribute, "the `#[deprecated]` attribute")
-            }
-            ast::Attribute::VerilogAttrs { .. } => {
-                self.unsupported(attribute, "the `#[verilog_attrs]` attribute")
-            }
+            // `(note = "..")` parses to the same AST as `= ".."` and
+            // prints as the latter; named arguments parse in any order
+            // and print as `since, note`.
+            ast::Attribute::Deprecated { since, note } => match (since, note) {
+                (None, None) => self.text("#[deprecated]"),
+                (None, Some(note)) => {
+                    self.text(format!("#[deprecated = \"{}\"]", note.inner))
+                }
+                (Some(since), None) => self.text(format!(
+                    "#[deprecated(since = \"{}\")]",
+                    since.inner
+                )),
+                (Some(since), Some(note)) => self.text(format!(
+                    "#[deprecated(since = \"{}\", note = \"{}\")]",
+                    since.inner, note.inner
+                )),
+            },
+            ast::Attribute::VerilogAttrs { entries } => self.text(format!(
+                "#[verilog_attrs({})]",
+                entries
+                    .iter()
+                    .map(|(key, value)| match value {
+                        Some(value) => format!("{key} = \"{}\"", value.inner),
+                        None => key.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         }
     }
 
@@ -2065,23 +2149,19 @@ impl<'code> DocumentBuilder<'code> {
         attribute_list: &ast::AttributeList,
         always_newline: bool,
     ) -> DocumentIdx {
-        // A `///` doc renders as a line comment; in inline or flattenable
-        // positions everything after it on the line would be swallowed.
-        if !always_newline
-            && let Some(doc) = attribute_list.0.iter().find(|attribute| {
-                matches!(***attribute, ast::Attribute::Documentation { .. })
-            })
-        {
-            self.record_unsupported(
-                doc,
-                "documentation on parameters or struct members",
-            );
-        }
         self.list(match attribute_list.0.len() {
             0 => vec![],
             1 => vec![
                 self.build_attribute(&attribute_list.0[0]),
-                if always_newline {
+                // A `///` doc renders as a line comment and must end its
+                // line even in inline positions; the enclosing layout is
+                // forced broken via [`Self::parameters_have_doc`].
+                if always_newline
+                    || matches!(
+                        *attribute_list.0[0],
+                        ast::Attribute::Documentation { .. }
+                    )
+                {
                     self.newline()
                 } else {
                     self.text(" ")
@@ -2149,6 +2229,24 @@ impl<'code> DocumentBuilder<'code> {
             }
         };
         Some(self.text(keyword))
+    }
+
+    /// Whether any parameter (`self` included) carries a `///` doc, which
+    /// renders as a line comment and so rules out any flat layout.
+    fn parameters_have_doc(parameter_list: &ast::ParameterList) -> bool {
+        let has_doc = |attributes: &ast::AttributeList| {
+            attributes.0.iter().any(|attribute| {
+                matches!(**attribute, ast::Attribute::Documentation { .. })
+            })
+        };
+        parameter_list
+            .self_
+            .as_ref()
+            .is_some_and(|(attributes, _, _)| has_doc(attributes))
+            || parameter_list
+                .args
+                .iter()
+                .any(|(attributes, _, _, _)| has_doc(attributes))
     }
 
     /// Returns a (try, catch) pair of documents for formatting the given

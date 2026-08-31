@@ -1,0 +1,7 @@
+enum E {
+    /// The documented variant
+    A,
+    #[no_mangle]
+    B { x: bool },
+    C,
+}

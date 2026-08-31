@@ -39,12 +39,8 @@ use spadefmt::{
 
 /// Inputs that `format` does not yet map to a fixed point. Steps fixing
 /// comment attachment and blank-line preservation shrink this list.
-const KNOWN_NON_IDEMPOTENT: &[&str] = &[
-    "keepemptylines.spade",
-    "rv.spade",
-    "test.spade",
-    "test4.spade",
-];
+const KNOWN_NON_IDEMPOTENT: &[&str] =
+    &["keepemptylines.spade", "rv.spade", "test4.spade"];
 
 /// Files (relative to `asts/`) containing constructs the document builder
 /// reports as unsupported. Implementing a construct moves its
@@ -52,21 +48,10 @@ const KNOWN_NON_IDEMPOTENT: &[&str] = &[
 /// here. `swim-templates/` entries are only asserted when the submodule is
 /// initialized.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "unsupported/binding_attr.spade",
-    "unsupported/deprecated_attr.spade",
-    "unsupported/fn_trait_sugar.spade",
-    "unsupported/fsm_attr.spade",
     "unsupported/incomplete_expr.spade",
     "unsupported/macro_call.spade",
     "unsupported/macro_def.spade",
-    "unsupported/member_doc.spade",
-    "unsupported/mod_inner_doc.spade",
-    "unsupported/module_doc.spade",
     "unsupported/multiple.spade",
-    "unsupported/optimize_attr.spade",
-    "unsupported/surfer_translator_attr.spade",
-    "unsupported/variant_attr.spade",
-    "unsupported/verilog_attrs.spade",
 ];
 
 const BLESS_HINT: &str =
@@ -458,10 +443,7 @@ fn unsupported_diagnostics_are_collected() {
                 constructs"
         )
     };
-    for expected in [
-        "attributes or documentation on `let` bindings",
-        "macro invocations",
-    ] {
+    for expected in ["macro definitions", "macro invocations"] {
         assert!(
             diagnostics.contains(expected),
             "diagnostics do not mention {expected}:\n{diagnostics}"

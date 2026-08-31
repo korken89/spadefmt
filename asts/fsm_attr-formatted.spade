@@ -1,0 +1,10 @@
+#[fsm]
+fn f() -> bool {
+    true
+}
+
+entity e(clk: clock) -> bool {
+    #[fsm(x)]
+    reg(clk) x = true;
+    x
+}

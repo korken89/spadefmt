@@ -1,4 +1,0 @@
-struct S {
-    /// The documented member
-    a: bool
-}
