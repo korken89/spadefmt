@@ -1,0 +1,35 @@
+// above the first item
+fn first() -> bool {
+    true
+}
+
+// above the second item, blank before the comment
+fn second() -> bool {
+    true
+}
+// above the third item, no blank above the comment
+fn third() -> bool {
+    true
+}
+
+// stacked comment one
+// stacked comment two
+
+fn fourth() -> bool {
+    true
+}
+
+// above the docs of a documented item
+/// documented
+fn fifth() -> bool {
+    true
+}
+
+fn sixth() -> bool {
+    true
+} // trailing an item
+
+// above the last item
+fn seventh() -> bool {
+    true
+}

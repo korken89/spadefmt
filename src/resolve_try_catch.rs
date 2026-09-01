@@ -120,6 +120,12 @@ pub fn resolve_try_catch(
         Document::TryCatch(try_body_idx, catch_body_idx) => {
             let mut try_context = context.clone();
             try_context.trying = true;
+            // Judge the try on its own merits: taint accumulated before
+            // this point (e.g. an over-wide doc or comment line no layout
+            // can shorten) must not fail it. The current column still
+            // carries over, so a try continuing an over-long line fails
+            // on its first push.
+            try_context.tainted = false;
 
             //println!("\ntrying from {:?}", try_context);
             //let mut buffer = String::new();
@@ -154,15 +160,21 @@ pub fn resolve_try_catch(
                 new_catch_body_idx
             } else {
                 try_context.trying = context.trying;
+                // Restore the taint that predated this try so an
+                // enclosing try still sees it.
+                try_context.tainted |= context.tainted;
                 *context = try_context;
                 //println!("\nflattened (now tainted = {})", context.tainted);
                 new_try_body_idx
             }
         }
         Document::Raw(raw) => {
-            // A raw with a newline cannot sit on one line, so it taints
-            // any flat attempt.
-            if context.flatten && raw.contains('\n') {
+            // A raw with a newline cannot sit on one line, and a `//`
+            // comment would swallow the rest of it, so both taint any
+            // flat attempt. Only comment raws start with `//` (macro
+            // slices start with the callee path or keyword).
+            if context.flatten && (raw.contains('\n') || raw.starts_with("//"))
+            {
                 context.tainted = true;
             }
             context.push_raw(

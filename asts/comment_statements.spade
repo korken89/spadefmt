@@ -1,0 +1,24 @@
+fn statements(input: bool) -> bool {
+    // above the first statement
+    let a = input; // trailing a statement
+    let b = a;
+
+    // above a statement, blank before the comment
+    let c = b;
+    // above a statement, no blank above the comment
+    let d = c;
+
+    /// doc line one
+    // between the docs of a documented statement
+    /// doc line two
+    let e = d;
+
+    let overflowing = (input, input, input, input, input, input, input, input, input, input); // trailing a statement that splits
+    let f =
+        // above a binding's value
+        e;
+    d
+    // after the result
+
+    // before the closing brace
+}

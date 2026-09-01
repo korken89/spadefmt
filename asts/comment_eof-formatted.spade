@@ -1,0 +1,6 @@
+fn only() -> bool {
+    true
+}
+// eof comment directly after the item
+
+// eof comment after a blank

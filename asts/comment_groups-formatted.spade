@@ -1,0 +1,36 @@
+entity grouped(
+    // above the first parameter
+    clk: clock,
+    // above the second parameter
+    rst: bool,
+) -> bool {
+    rst
+}
+
+enum Options {
+    // above a variant
+    First,
+    Second, // trailing a variant
+}
+
+struct Fields {
+    // above a member
+    a: bool,
+    b: bool, // trailing a member
+}
+
+fn matches(x: Options) -> bool {
+    match x {
+        // above an arm
+        Options::First => true,
+        Options::Second => false, // trailing an arm
+    }
+}
+
+fn arguments(x: bool) -> (bool, bool) {
+    (
+        // above a tuple element
+        x,
+        x, // trailing a tuple element
+    )
+}

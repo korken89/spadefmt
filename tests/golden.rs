@@ -16,15 +16,18 @@
 //! - Golden: `format(asts/X.spade)` must equal `asts/X-formatted.spade`; a
 //!   golden whose input is gone is an orphan and fails. Regenerate the goldens
 //!   (and delete orphans) with `SPADEFMT_BLESS=1 cargo test`.
-//! - Idempotency: formatting must be a fixed point. [`KNOWN_NON_IDEMPOTENT`]
-//!   lists inputs where it is not yet; entries are asserted to stay broken so
-//!   fixes must shrink the list.
+//! - Idempotency: formatting must be a fixed point, over the inputs and the
+//!   checked-in goldens alike.
 //! - Corpus sweep: formatting any `.spade` file under `asts/` (recursively)
 //!   must never panic; it either formats, fails to parse, or reports
-//!   unsupported constructs. [`KNOWN_UNSUPPORTED`] works like
-//!   [`KNOWN_NON_IDEMPOTENT`].
+//!   unsupported constructs. [`KNOWN_UNSUPPORTED`] entries are asserted to stay
+//!   unsupported so fixes must shrink the list.
 //! - Unsupported fixtures: every file under `asts/unsupported/` must report at
 //!   least one located "unsupported construct" diagnostic.
+//!
+//! Every successful format also asserts that no comment went unclaimed
+//! (`Formatted::unclaimed_comments`): an unclaimed comment prints at the
+//! end of the output instead of at its anchor, which is a placement bug.
 
 use std::{
     env, fs, io,
@@ -36,10 +39,6 @@ use spadefmt::{
     config::Config,
     format::{FormatError, Formatted, format_source},
 };
-
-/// Inputs that `format` does not yet map to a fixed point. Steps fixing
-/// comment attachment and blank-line preservation shrink this list.
-const KNOWN_NON_IDEMPOTENT: &[&str] = &["keepemptylines.spade"];
 
 /// Files (relative to `asts/`) containing constructs the document builder
 /// reports as unsupported. Implementing a construct moves its
@@ -107,10 +106,6 @@ fn top_level_spade_files() -> (Vec<PathBuf>, Vec<PathBuf>) {
     (inputs, goldens)
 }
 
-fn corpus_inputs() -> Vec<PathBuf> {
-    top_level_spade_files().0
-}
-
 /// Every `.spade` file under `asts/`, recursively.
 fn all_spade_files(directory: &Path, into: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("directory should be readable")
@@ -156,7 +151,11 @@ fn assert_clean_output(text: &str, source: &str) {
 
 fn format_str(code: &str, source: &str, config: &Config) -> String {
     let result = format_source(source, code, config, false);
-    let Formatted { text, .. } = result.unwrap_or_else(|error| match error {
+    let Formatted {
+        text,
+        unclaimed_comments,
+        ..
+    } = result.unwrap_or_else(|error| match error {
         FormatError::Parse { diagnostics }
         | FormatError::Unsupported { diagnostics } => {
             panic!("failed to format {source}:\n{diagnostics}")
@@ -164,6 +163,11 @@ fn format_str(code: &str, source: &str, config: &Config) -> String {
         other => panic!("failed to format {source}: {other}"),
     });
     assert_clean_output(&text, source);
+    assert_eq!(
+        unclaimed_comments, 0,
+        "{source}: {unclaimed_comments} comment(s) went unclaimed and \
+         printed at the end of the output instead of at their anchors"
+    );
     text
 }
 
@@ -275,40 +279,23 @@ fn golden() {
     }
 }
 
+/// Formatting must be a fixed point. The checked-in goldens are fed as
+/// inputs too: each must already be at the fixed point.
 #[test]
 fn idempotency() {
     let config = config();
-    let inputs = corpus_inputs();
+    let (inputs, goldens) = top_level_spade_files();
 
-    for entry in KNOWN_NON_IDEMPOTENT {
-        assert!(
-            inputs.iter().any(|input| {
-                input.file_name().unwrap().to_string_lossy() == *entry
-            }),
-            "{entry} is listed in KNOWN_NON_IDEMPOTENT but is not a corpus \
-             input"
-        );
-    }
-
-    for input in inputs {
+    for input in inputs.iter().chain(&goldens) {
         let file_name = input.file_name().unwrap().to_string_lossy();
         let source = format!("{} (reformatted)", input.display());
-        let once = format_file(&input, &config);
+        let once = format_file(input, &config);
         let twice = format_str(&once, &source, &config);
-
-        if KNOWN_NON_IDEMPOTENT.contains(&file_name.as_ref()) {
-            assert_ne!(
-                once, twice,
-                "{file_name} is now idempotent; remove it from \
-                 KNOWN_NON_IDEMPOTENT"
-            );
-        } else {
-            assert_text_eq(
-                &twice,
-                &once,
-                &format!("reformatting {file_name} changed its output"),
-            );
-        }
+        assert_text_eq(
+            &twice,
+            &once,
+            &format!("reformatting {file_name} changed its output"),
+        );
     }
 }
 
@@ -337,7 +324,8 @@ fn corpus_sweep() {
         };
 
         let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-            format_source(&relative, &code, &config, false).map(|_| ())
+            format_source(&relative, &code, &config, false)
+                .map(|formatted| formatted.unclaimed_comments)
         }));
 
         unvisited.retain(|entry| *entry != relative);
@@ -357,11 +345,16 @@ fn corpus_sweep() {
             Ok(Err(error)) => {
                 failures.push(format!("{relative}: failed to format: {error}"))
             }
-            Ok(Ok(())) if listed => failures.push(format!(
+            Ok(Ok(_)) if listed => failures.push(format!(
                 "{relative}: no longer unsupported; remove it from \
                  KNOWN_UNSUPPORTED"
             )),
-            Ok(Ok(())) => {}
+            Ok(Ok(unclaimed)) if unclaimed > 0 => failures.push(format!(
+                "{relative}: {unclaimed} comment(s) went unclaimed and \
+                 printed at the end of the output instead of at their \
+                 anchors"
+            )),
+            Ok(Ok(_)) => {}
         }
     }
     // A plain clone (no `git submodule update --init`) leaves swim-templates

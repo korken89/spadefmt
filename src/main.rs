@@ -72,7 +72,7 @@ fn main() -> Result<(), Whatever> {
     let output = if opts.debug {
         parsed.debug_document(&config)
     } else {
-        parsed.format(&config)
+        parsed.format(&config).map(|formatted| formatted.text)
     };
     let output = match output {
         Ok(output) => output,

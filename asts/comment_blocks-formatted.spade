@@ -1,0 +1,11 @@
+/* above an item */
+fn blocks(x: bool) -> bool {
+    let a = /* inline before a value */ x;
+    let b = a; /* trailing a statement */
+    /* own-line above a statement */
+    let c = b;
+    /* multi-line block
+    above a statement */
+    let d = c;
+    d
+}

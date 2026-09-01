@@ -1,0 +1,128 @@
+fn call_result() -> bool {
+    g(
+        // only a comment
+    )
+}
+
+fn call_statement() -> bool {
+    let x = g(
+        // only a comment
+    );
+    x
+}
+
+fn call_open_line() -> bool {
+    g( // trailing the open paren
+    )
+}
+
+fn call_blank_between() -> bool {
+    g(
+        // first
+
+        // second
+    )
+}
+
+fn call_inline_then_line() -> bool {
+    g(/* inline */ // line
+    )
+}
+
+fn call_multi_line_block() -> bool {
+    g(/* first line
+       second line */)
+}
+
+fn nested() -> bool {
+    h(g(/* inner */))
+}
+
+fn named_arguments() -> bool {
+    g$(/* none */)
+}
+
+fn turbofish() -> bool {
+    g::</* none */>()
+}
+
+fn literals() -> (/* unit */) {
+    let a = [/* empty */];
+    ()
+}
+
+fn overflowing_empty_call() -> bool {
+    let xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx = yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy();
+    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+}
+
+fn no_parameters(/* no params */) -> bool { true }
+
+entity no_ports(
+    // no ports
+) {
+}
+
+fn no_arms(x: bool) -> bool {
+    match x {
+        // nothing
+    }
+}
+
+struct Members {
+    // no members yet
+}
+
+struct InlineMembers { /* none */ }
+
+struct Empty {}
+
+enum Variants {
+    // no variants yet
+}
+
+enum EmptyVariants {}
+
+enum VariantBodies {
+    A {},
+    B { /* none */ },
+    C {
+        // none
+    },
+}
+
+impl X for Y {
+    // nothing here
+}
+
+impl X for Z {}
+
+trait T {
+    // nothing here
+}
+
+trait U {}
+
+mod m {
+    // nothing here
+}
+
+mod n {}
+
+impl W for V {
+    fn lone_self(self /* only self */) -> bool { true }
+
+    fn self_block_trailing(self /* after self */, a: bool) -> bool { a }
+
+    fn self_line_trailing(self, // after self
+        a: bool,
+    ) -> bool { a }
+
+    fn self_leading(
+        // above self
+        self,
+        a: bool,
+    ) -> bool { a }
+
+    fn lone_self_broken(self) -> Ssssssssssssssssssssssssssssssssssssssssssssssssssssssss { true }
+}

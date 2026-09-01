@@ -17,3 +17,35 @@ trait Behavior {
 
     fn three(self) -> bool;
 }
+
+impl TightTypes {
+    type A = bool;
+    type B = bool;
+    fn one(self) -> bool {
+        true
+    }
+}
+
+impl SpacedTypes {
+    type A = bool;
+
+    type B = bool;
+
+    fn one(self) -> bool {
+        true
+    }
+}
+
+trait TightAssoc {
+    type A;
+    type B;
+    fn one(self) -> bool;
+}
+
+trait SpacedAssoc {
+    type A;
+
+    type B;
+
+    fn one(self) -> bool;
+}

@@ -4,7 +4,7 @@ entity top() {
     // test 2
     let a = 1; // test 3 (same line)
     /* test 2.5 */
-    let b = 2; /* test 4 */
+    let b = /* test 4 */ 2;
 }
 
 mod submodule {
@@ -14,7 +14,7 @@ mod submodule {
         // nested test 2
         let a = 1; // nested test 3 (same line)
         /* nested test 2.5 */
-        let b = 2; /* nested test 4 */
+        let b = /* nested test 4 */ 2;
     }
 }
 

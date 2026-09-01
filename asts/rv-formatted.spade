@@ -29,10 +29,7 @@ impl<T> Rv<T> {
     }
 
     /// Buffers the values using a FIFO, which can be used to cross clock domains.
-    entity fifo_buffer<
-        #uint Depth,
-        #uint AddrWidth,
-    >(
+    entity fifo_buffer<#uint Depth, #uint AddrWidth>(
         self,
         write_clk: clock,
         write_rst: bool,
@@ -91,10 +88,7 @@ impl Rv<uint<16>> {
 
         set self.ready = match state { U8SplitState::Empty => true, _ => false };
 
-        let data = match (
-            state,
-            *self.data,
-        ) {
+        let data = match (state, *self.data) {
             (U8SplitState::Empty, Some(upstream)) => Some(trunc(upstream)),
             (U8SplitState::Empty, None) => None,
             (U8SplitState::Half(value), _) => Some(value),
@@ -106,6 +100,7 @@ impl Rv<uint<16>> {
 }
 
 ///////////////////////////////////////////
+//          Test harnesses
 ///////////////////////////////////////////
 entity buffer_th(
     clk: clock,
@@ -113,7 +108,6 @@ entity buffer_th(
     ready: bool,
     value: Option<uint<16>>,
 ) -> Option<uint<16>> {
-    //          Test harnesses
     let rv = Rv$(data: &value, ready: inst new_mut_wire());
 
     let out = rv.inst buffer(clk, rst);

@@ -29,11 +29,9 @@ use spade_diagnostics::{
 use spade_parser::Comment;
 
 use crate::{
-    comment_insertion::CommentInserter,
+    comment_insertion::CommentMap,
     config::Config,
-    document::{
-        self, DocumentIdx, InternedDocumentStore, ResolvedPrintingContext,
-    },
+    document::{self, DocumentIdx, InternedDocumentStore},
     document_builder::DocumentBuilder,
     resolve_try_catch::{PrintingContext, resolve_try_catch},
 };
@@ -44,6 +42,10 @@ pub struct Formatted {
     pub text: String,
     /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
+    /// Comments no claim site attached anywhere; they are appended at the
+    /// end of the output instead (never lost). Nonzero means a comment
+    /// placement bug.
+    pub unclaimed_comments: usize,
 }
 
 #[derive(Debug, Snafu)]
@@ -144,14 +146,15 @@ impl Parsed {
     fn build(
         &self,
         config: &Config,
-    ) -> (InternedDocumentStore, DocumentIdx, Vec<Diagnostic>) {
+    ) -> (InternedDocumentStore, DocumentIdx, Vec<Diagnostic>, usize) {
         let code_bundle_guard = self.code_bundle.read().unwrap();
         let file = code_bundle_guard.files.get(self.file_id).unwrap();
-        DocumentBuilder::new(config.indent.inner as isize).build_root(
-            &self.root,
-            file,
-            &mut CommentInserter::new(&self.comments, &self.code),
+        let mut comments = CommentMap::new(&self.comments, &self.code);
+        let (store, root_idx, diagnostics) = DocumentBuilder::new(
+            config.indent.inner as isize,
         )
+        .build_root(&self.root, file, &mut comments);
+        (store, root_idx, diagnostics, comments.misplaced())
     }
 
     /// Renders `diagnostics` the same way parse-time ones are rendered.
@@ -165,8 +168,9 @@ impl Parsed {
     }
 
     /// Renders the formatted source according to `config`.
-    pub fn format(&self, config: &Config) -> Result<String, FormatError> {
-        let (mut store, root_idx, unsupported) = self.build(config);
+    pub fn format(&self, config: &Config) -> Result<Formatted, FormatError> {
+        let (mut store, root_idx, unsupported, unclaimed_comments) =
+            self.build(config);
         if !unsupported.is_empty() {
             return UnsupportedSnafu {
                 diagnostics: self.render_diagnostics(&unsupported),
@@ -187,13 +191,16 @@ impl Parsed {
             &store,
             &mut f,
             new_root_idx,
-            &mut ResolvedPrintingContext::new(),
             false,
             &mut false,
         )
         .context(PrintSnafu)?;
 
-        Ok(into_clean_text(buffer))
+        Ok(Formatted {
+            text: into_clean_text(buffer),
+            diagnostics: self.diagnostics.clone(),
+            unclaimed_comments,
+        })
     }
 
     /// Renders the unresolved document tree for debugging.
@@ -201,7 +208,7 @@ impl Parsed {
         &self,
         config: &Config,
     ) -> Result<String, FormatError> {
-        let (store, root_idx, unsupported) = self.build(config);
+        let (store, root_idx, unsupported, _) = self.build(config);
         if !unsupported.is_empty() {
             return UnsupportedSnafu {
                 diagnostics: self.render_diagnostics(&unsupported),
@@ -237,10 +244,5 @@ pub fn format_source(
     config: &Config,
     color: bool,
 ) -> Result<Formatted, FormatError> {
-    let parsed = parse_source(file_name, code, color)?;
-    let text = parsed.format(config)?;
-    Ok(Formatted {
-        text,
-        diagnostics: parsed.diagnostics,
-    })
+    parse_source(file_name, code, color)?.format(config)
 }

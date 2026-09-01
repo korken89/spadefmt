@@ -61,7 +61,7 @@ impl Rv<uint<16>> {
 
 
         reg(clk) state reset(rst: U8SplitState::Empty) =
-// this one shouldn't be kept:
+// one blank line below is kept:
         
             match (state, inst read_mut_wire(ds), *self.data) {
                 (U8SplitState::Empty, _, None) => U8SplitState::Empty,

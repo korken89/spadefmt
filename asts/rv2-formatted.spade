@@ -29,10 +29,7 @@ impl<T> Rv<T> {
     }
 
     /// Buffers the values using a FIFO, which can be used to cross clock domains.
-    entity fifo_buffer<
-        #uint Depth,
-        #uint AddrWidth,
-    >(
+    entity fifo_buffer<#uint Depth, #uint AddrWidth>(
         self,
         write_clk: clock,
         write_rst: bool,
