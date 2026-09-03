@@ -1,0 +1,6 @@
+trait T {
+    type A;
+
+    type B;
+    fn m(self) -> bool;
+}

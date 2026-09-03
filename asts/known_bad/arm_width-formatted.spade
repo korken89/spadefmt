@@ -1,0 +1,11 @@
+impl Rv<uint<16>> {
+    entity split_to_u8(self, clk: clock, rst: bool) -> Rv<uint<8>> {
+        let next = match (state, ready, *self.data) {
+            (U8SplitState::Half(values), true, Some(data)) => U8SplitState::Full(
+                data,
+            ),
+            _ => state,
+        };
+        set self.ready = match state { U8SplitState::Empty => true, _ => false };
+    }
+}

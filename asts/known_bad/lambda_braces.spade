@@ -1,0 +1,4 @@
+fn f() -> bool {
+    let l = fn |x| { x };
+    true
+}
