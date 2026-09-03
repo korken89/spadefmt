@@ -1,0 +1,90 @@
+// Every literal prints from its source text. Absent because they are parse
+// errors at Spade v0.20: `0XFF` (no uppercase hex prefix) and `0o777u8` (an
+// octal suffix only admits octal digits).
+fn separators() -> uint<32> {
+    let a = 5_999_999;
+    let b = 1__000;
+    let c = 1_;
+    let d = 0b1010_1010;
+    let e = 0xAB_CD;
+    let f = 0o7_7;
+    a
+}
+
+fn radixes() -> uint<32> {
+    let a = 0xFF;
+    let b = 0xabcdef;
+    let c = 0b1010;
+    let d = 0o777;
+    a
+}
+
+fn suffixes() -> int<32> {
+    let a = 5u8;
+    let b = 5i8;
+    let c = 5U8;
+    let d = 5I8;
+    let e = 5u;
+    let f = 5i;
+    let g = 0u0;
+    let h = 1_u1;
+    let i = 1_000u16;
+    let j = 0xABAD_1DEAu32;
+    let k = 0b1101u4;
+    let l = 0o17u4;
+    let m = 340282366920938463463374607431768211456;
+    let n = -127i22;
+    let o = +5;
+    let p = -5;
+    a
+}
+
+fn ascii() -> uint<8> {
+    let a = b"ab";
+    let b = b"";
+    let c = b"a\nb";
+    b'a'
+}
+
+fn generics<#uint N = 0x8>(x: bool) -> int<0x8> where N > 0x8 else "small" {
+    x
+}
+
+fn positions(x: [bool; 0x4]) -> [bool; 0x4] {
+    let a = foo::<8, 0x10>(x);
+    let b = g::$<N: 0x8>(x);
+    let c = [true; 0x4];
+    let d = x[0x0..0x3];
+    let e = x[0b1];
+    c
+}
+
+entity insts(clk: clock, rst: bool) -> uint<8> {
+    let p = inst(0x2) pipe(clk, 0x0);
+    reg(clk) count reset(rst: 0x0) = count + 0b1;
+    count
+}
+
+pipeline(0x2) pipe(clk: clock, x: uint<8>) -> uint<8> {
+    reg * 0x2;
+    stage(-0x2).x
+}
+
+fn patterns(x: int<8>, y: [uint<8>; 2]) -> bool {
+    let a = match x {
+        0xFF => true,
+        5i8 => true,
+        -1 => true,
+        1_0 => true,
+        b'a' => true,
+        _ => false,
+    };
+    let b = match y { [0x1, 0b10] => true, _ => false };
+    a && b
+}
+
+fn tuples(x: (bool, bool)) -> bool {
+    let a = x.0x1;
+    let b = x.0x1;
+    a && b
+}

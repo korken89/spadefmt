@@ -1,0 +1,34 @@
+// Comments between a folded sign and its literal lead the token like an
+// operand's, in expression, pattern, and type position alike.
+fn f(x: int<8>) -> int<-/* t */ 8> {
+    let a = -/* c */ 5;
+    let b = -
+        // own line
+        5;
+    let c = -
+        // trailing
+        5;
+    match x {
+        -/* p */ 1 => a,
+        -
+            // line
+            2 => b,
+        -/* multi
+        line */ 3 => c,
+        _ => b,
+    }
+}
+
+fn g(
+    x: int<
+        -
+            // t
+            8,
+    >,
+    y: int<
+        -/* multi
+        line */ 8,
+    >,
+) -> bool {
+    true
+}

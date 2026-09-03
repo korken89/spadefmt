@@ -440,6 +440,56 @@ impl<'code> DocumentBuilder<'code> {
         }
     }
 
+    fn source(&self, range: Range<usize>) -> &'code str {
+        &self.file.borrow().unwrap().source()[range]
+    }
+
+    /// The exact source bytes of `range` as measured text: a token whose
+    /// lexeme the AST does not keep (literals). Comments inside the range
+    /// are claimed since their text is already part of the slice.
+    fn source_text(
+        &self,
+        range: Range<usize>,
+        comments: &mut CommentMap,
+    ) -> DocumentIdx {
+        comments.take_within(&range);
+        self.text(self.source(range))
+    }
+
+    /// A pattern or type literal, whose loc spans the folded sign, any
+    /// comments after it, and the token: prints like an expression
+    /// literal, the sign and then the comments leading the token.
+    fn signed_literal(
+        &self,
+        range: Range<usize>,
+        comments: &mut CommentMap,
+    ) -> DocumentIdx {
+        let sign = match self.source(range.clone()).as_bytes() {
+            [b'-' | b'+', ..] => 1,
+            _ => 0,
+        };
+        let leading = comments.take_within(&range);
+        let after = leading
+            .iter()
+            .map(|comment| comment.end)
+            .fold(range.start + sign, usize::max);
+        let token_start =
+            range.end - self.source(after..range.end).trim_start().len();
+        let token = self.with_adjacent_leading(
+            leading,
+            token_start,
+            self.text(self.source(token_start..range.end)),
+        );
+        if sign == 0 {
+            token
+        } else {
+            self.list([
+                self.text(self.source(range.start..range.start + sign)),
+                token,
+            ])
+        }
+    }
+
     /// The exact source bytes of `span`, printed verbatim. Comments inside
     /// the span are claimed since their text is already part of the slice.
     fn raw_source_span(
@@ -449,8 +499,7 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         let range = span.byte_range();
         comments.take_within(&range);
-        let file = self.file.borrow().unwrap();
-        self.raw_text(dedented_raw(&file.source()[range]))
+        self.raw_text(dedented_raw(self.source(range)))
     }
 
     pub fn build_root(
@@ -1430,11 +1479,23 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         // Comments directly above or inline before an expression that no
         // coarser construct claimed (e.g. above a binding's value) belong
-        // to it. Own-line ones break the line before and after and nest
-        // the comment and expression one level as a continuation.
-        let leading =
-            comments.take_adjacent_leading(expression.byte_range().start);
+        // to it.
+        let start = expression.byte_range().start;
+        let leading = comments.take_adjacent_leading(start);
         let doc = self.build_expression_inner(expression, comments);
+        self.with_adjacent_leading(leading, start, doc)
+    }
+
+    /// Prefixes the construct `doc` starting at `start` with its claimed
+    /// adjacent leading comments. Own-line ones break the line before and
+    /// after and nest the comment and construct one level as a
+    /// continuation.
+    fn with_adjacent_leading(
+        &self,
+        leading: Vec<CommentToPrint>,
+        start: usize,
+        doc: DocumentIdx,
+    ) -> DocumentIdx {
         if leading.is_empty() {
             return doc;
         }
@@ -1443,11 +1504,7 @@ impl<'code> DocumentBuilder<'code> {
         if own_line {
             list.push(self.newline());
         }
-        self.emit_leading(
-            &leading,
-            self.line_of(expression.byte_range().start),
-            &mut list,
-        );
+        self.emit_leading(&leading, self.line_of(start), &mut list);
         list.push(doc);
         if own_line {
             self.nest(self.list(list), self.indent)
@@ -1463,8 +1520,25 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match &**expression {
             ast::Expression::Identifier(path) => self.build_path(path),
+            // The parser folds a unary `-` into the literal's value and
+            // keeps only the bare token in the inner loc (`--5` is 5,
+            // `-0` is 0), so the sign comes from the value and comments
+            // between the sign(s) and the token lead the token like an
+            // operand's would.
             ast::Expression::IntLiteral(int_literal) => {
-                self.text(int_literal.to_string())
+                let range = int_literal.byte_range();
+                let leading = comments
+                    .take_within(&(expression.byte_range().start..range.start));
+                let token = self.with_adjacent_leading(
+                    leading,
+                    range.start,
+                    self.source_text(range, comments),
+                );
+                if int_literal.is_negative() {
+                    self.list([self.text("-"), token])
+                } else {
+                    token
+                }
             }
             ast::Expression::BoolLiteral(bool_literal) => {
                 self.text(bool_literal.to_string())
@@ -1476,14 +1550,24 @@ impl<'code> DocumentBuilder<'code> {
                     ast::BitLiteral::HighImp => "HIGHIMP",
                 })
             }
-            ast::Expression::ArrayLiteral(elements) => self.group(
-                token::TokenKind::OpenBracket.as_str(),
-                elements,
-                token::TokenKind::Comma,
-                token::TokenKind::CloseBracket.as_str(),
-                &expression.byte_range(),
-                comments,
-            ),
+            // The parser desugars `b"ab"` into an array of `uint<8>`
+            // literals, one per character inside the quotes; a real array
+            // span starts with `[`.
+            ast::Expression::ArrayLiteral(elements) => {
+                let range = expression.byte_range();
+                if self.source(range.clone()).starts_with("b\"") {
+                    self.source_text(range, comments)
+                } else {
+                    self.group(
+                        token::TokenKind::OpenBracket.as_str(),
+                        elements,
+                        token::TokenKind::Comma,
+                        token::TokenKind::CloseBracket.as_str(),
+                        &range,
+                        comments,
+                    )
+                }
+            }
             ast::Expression::ArrayShorthandLiteral(element, amount) => self
                 .list([
                     self.token(token::TokenKind::OpenBracket),
@@ -1525,7 +1609,8 @@ impl<'code> DocumentBuilder<'code> {
             // The deprecated `x#0` syntax normalizes to `x.0`.
             ast::Expression::TupleIndex { target, index, .. } => self.list([
                 self.build_expression(target, comments),
-                self.text(format!(".{}", **index)),
+                self.text("."),
+                self.source_text(index.byte_range(), comments),
             ]),
             ast::Expression::FieldAccess(parent, field) => self.list([
                 self.build_expression(parent, comments),
@@ -2077,11 +2162,8 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         let leading = self.inline_leading(pattern, comments);
         let doc = match &**pattern {
-            ast::Pattern::Integer(int_literal) => {
-                self.text(int_literal.to_string())
-            }
-            ast::Pattern::Bool(bool_literal) => {
-                self.text(bool_literal.to_string())
+            ast::Pattern::Integer(_) | ast::Pattern::Bool(_) => {
+                self.signed_literal(pattern.byte_range(), comments)
             }
             ast::Pattern::Bound(name, inner) => self.list([
                 self.text(format!("{name} @ ")),
@@ -2195,8 +2277,9 @@ impl<'code> DocumentBuilder<'code> {
             ast::TypeExpression::TypeSpec(type_spec) => {
                 self.build_type_spec(type_spec, comments)
             }
-            ast::TypeExpression::Bool(value) => self.text(value.to_string()),
-            ast::TypeExpression::Integer(value) => self.text(value.to_string()),
+            ast::TypeExpression::Bool(_) | ast::TypeExpression::Integer(_) => {
+                self.signed_literal(type_expression.byte_range(), comments)
+            }
             // Const generics are always brace-delimited in type position.
             ast::TypeExpression::ConstGeneric(expression) => self.list([
                 self.text("{"),

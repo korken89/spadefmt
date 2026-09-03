@@ -44,6 +44,8 @@ struct MappedComment<'source> {
 /// A claimed comment, ready to print.
 pub struct CommentToPrint<'source> {
     pub text: &'source str,
+    /// Byte position just past the comment.
+    pub end: usize,
     pub start_line: usize,
     pub end_line: usize,
     /// Print inline (followed by a space) rather than on its own line.
@@ -204,6 +206,7 @@ impl<'source> CommentMap<'source> {
     fn to_print(comment: &MappedComment<'source>) -> CommentToPrint<'source> {
         CommentToPrint {
             text: comment.text,
+            end: comment.span.end,
             start_line: comment.start_line,
             end_line: comment.end_line,
             inline: comment.class == CommentClass::InlineLeading,

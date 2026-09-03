@@ -29,6 +29,9 @@
 //!   unsupported so fixes must shrink the list.
 //! - Unsupported fixtures: every file under `asts/unsupported/` must report at
 //!   least one located "unsupported construct" diagnostic.
+//! - Stdlib sweep: every file of the pinned Spade checkout's standard library
+//!   (`spade-compiler/stdlib/`, found through `cargo metadata`) must format and
+//!   be a fixed point; skipped with a note when the checkout is absent.
 //!
 //! Every successful format also asserts that no comment went unclaimed
 //! (`Formatted::unclaimed_comments`): an unclaimed comment prints at the
@@ -38,8 +41,10 @@ use std::{
     env, fs, io,
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
+    process::Command,
 };
 
+use serde::Deserialize;
 use spadefmt::{
     config::Config,
     format::{FormatError, Formatted, format_source},
@@ -73,8 +78,8 @@ fn env_flag(name: &str) -> bool {
         Some("1") | Some("true") => true,
         Some("") | Some("0") | Some("false") => false,
         _ => panic!(
-            "unrecognized {name} value {value:?}; set {name}=1 to \
-             regenerate goldens"
+            "unrecognized {name} value {value:?}; set {name}=1 to enable \
+             it or leave it unset"
         ),
     }
 }
@@ -92,7 +97,7 @@ enum Corpus {
 }
 
 impl Corpus {
-    const ALL: [Corpus; 2] = [Corpus::TopLevel, Corpus::KnownBad];
+    const ALL: [Self; 2] = [Self::TopLevel, Self::KnownBad];
 
     fn directory(self) -> PathBuf {
         match self {
@@ -177,7 +182,49 @@ fn golden_pairs(corpus: Corpus) -> (Vec<PathBuf>, Vec<PathBuf>) {
     (inputs, goldens)
 }
 
-/// Every `.spade` file under `asts/`, recursively.
+/// The pinned Spade checkout's `spade-compiler/stdlib/`, a sibling of the
+/// `spade-ast` package's directory; `None` (with a note) when the
+/// dependency is not laid out as a source checkout.
+fn stdlib_dir() -> Option<PathBuf> {
+    #[derive(Deserialize)]
+    struct Metadata {
+        packages: Vec<Package>,
+    }
+    #[derive(Deserialize)]
+    struct Package {
+        name: String,
+        manifest_path: PathBuf,
+    }
+
+    let located = (|| {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let output = Command::new(cargo)
+            .args(["metadata", "--format-version", "1"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let metadata: Metadata = serde_json::from_slice(&output.stdout).ok()?;
+        let manifest = metadata
+            .packages
+            .into_iter()
+            .find(|package| package.name == "spade-ast")?
+            .manifest_path;
+        let stdlib = manifest.parent()?.parent()?.join("spade-compiler/stdlib");
+        stdlib.is_dir().then_some(stdlib)
+    })();
+    if located.is_none() {
+        eprintln!(
+            "skipping the stdlib sweep: no spade-compiler/stdlib next to the \
+             spade-ast checkout"
+        );
+    }
+    located
+}
+
+/// Every `.spade` file under `directory`, recursively.
 fn all_spade_files(directory: &Path, into: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("directory should be readable")
     {
@@ -449,6 +496,34 @@ fn corpus_sweep() {
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The pinned Spade standard library must format, be a fixed point, and
+/// leave no comment unclaimed.
+#[test]
+fn stdlib_sweep() {
+    let Some(directory) = stdlib_dir() else {
+        return;
+    };
+    let config = config();
+    let mut files = vec![];
+    all_spade_files(&directory, &mut files);
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no .spade files found under {directory:?}"
+    );
+
+    for path in &files {
+        let source = format!("{} (reformatted)", path.display());
+        let once = format_file(path, &config);
+        let twice = format_str(&once, &source, &config);
+        assert_text_eq(
+            &twice,
+            &once,
+            &format!("reformatting {} changed its output", path.display()),
+        );
+    }
 }
 
 /// Every `asts/unsupported/` fixture must report at least one located

@@ -1277,6 +1277,7 @@ dependencies = [
  "inform",
  "itertools",
  "serde",
+ "serde_json",
  "snafu",
  "spade-ast",
  "spade-codespan-reporting",
