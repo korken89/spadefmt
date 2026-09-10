@@ -20,3 +20,4 @@ pub mod document;
 pub mod document_builder;
 pub mod format;
 pub mod resolve_try_catch;
+pub mod walk;

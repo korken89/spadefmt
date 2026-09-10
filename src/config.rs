@@ -11,10 +11,16 @@
 // copy of the GNU General Public License along with spadefmt. If not, see
 // <https://www.gnu.org/licenses/>.
 
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    fs, io,
+};
+
+use camino::{Utf8Path, Utf8PathBuf};
 
 use derivative::Derivative;
 use serde::Deserialize;
+use snafu::{ResultExt, Snafu};
 use string16::{String16, string16};
 
 mod string16 {
@@ -169,16 +175,9 @@ impl<
     }
 }
 
-#[derive(Default, Deserialize, Debug)]
-pub enum FunctionSignatureStyle {
-    Wide,
-    Block,
-    #[default]
-    Tall,
-}
-
 /// Configures the behavior of `spadefmt`.
-#[derive(Default, Deserialize, Debug)]
+#[derive(Default, Deserialize, Debug, Clone, Copy)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// The maximum line length `spadefmt` should aim for.
     #[serde(default)]
@@ -197,4 +196,38 @@ pub struct Config {
         4,
         { string16("character count") },
     >,
+}
+
+/// The only file name config discovery looks for.
+pub const FILE_NAME: &str = "spadefmt.toml";
+
+#[derive(Debug, Snafu)]
+pub enum ConfigError {
+    #[snafu(display("failed to read config {path}"))]
+    Read {
+        path: Utf8PathBuf,
+        source: io::Error,
+    },
+    #[snafu(display("invalid config {path}"))]
+    Parse {
+        path: Utf8PathBuf,
+        source: toml::de::Error,
+    },
+}
+
+impl Config {
+    /// The nearest `spadefmt.toml` in `directory` or its ancestors. Pass an
+    /// absolute directory so the walk reaches the filesystem root.
+    pub fn discover(directory: &Utf8Path) -> Option<Utf8PathBuf> {
+        directory
+            .ancestors()
+            .map(|ancestor| ancestor.join(FILE_NAME))
+            .find(|candidate| candidate.is_file())
+    }
+
+    /// Reads and parses the config file at `path`.
+    pub fn load(path: &Utf8Path) -> Result<Self, ConfigError> {
+        let contents = fs::read_to_string(path).context(ReadSnafu { path })?;
+        toml::from_str(&contents).context(ParseSnafu { path })
+    }
 }

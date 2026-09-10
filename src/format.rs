@@ -38,7 +38,8 @@ use crate::{
 
 /// The result of successfully formatting a source file.
 pub struct Formatted {
-    /// Formatted source with no trailing whitespace, ending with a newline.
+    /// Formatted source with no trailing whitespace, ending with a newline;
+    /// empty for an input with no content.
     pub text: String,
     /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
@@ -227,8 +228,13 @@ impl Parsed {
 
 /// Appends a final newline and strips trailing spaces, tabs, and carriage
 /// returns from every line. Stopping at that set keeps other trailing
-/// characters (e.g. no-break spaces inside comments) intact.
+/// characters (e.g. no-break spaces inside comments) intact. A render with
+/// no content at all (an empty or whitespace-only input) is the empty
+/// string, so an empty file is a fixed point.
 fn into_clean_text(rendered: String) -> String {
+    if rendered.trim().is_empty() {
+        return String::new();
+    }
     rendered
         .split('\n')
         .map(|line| line.trim_end_matches([' ', '\t', '\r']))

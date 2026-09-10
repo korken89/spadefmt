@@ -48,6 +48,7 @@ use serde::Deserialize;
 use spadefmt::{
     config::Config,
     format::{FormatError, Formatted, format_source},
+    walk::spade_files,
 };
 
 /// Files (relative to `asts/`) containing constructs the document builder
@@ -65,9 +66,9 @@ fn asts_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("asts")
 }
 
+/// The corpus is pinned at width 80, independent of any config file.
 fn config() -> Config {
-    toml::from_str(include_str!("../spadefmt.toml"))
-        .expect("repo spadefmt.toml should parse")
+    toml::from_str("max_width = 80").expect("harness config should parse")
 }
 
 fn env_flag(name: &str) -> bool {
@@ -224,22 +225,6 @@ fn stdlib_dir() -> Option<PathBuf> {
     located
 }
 
-/// Every `.spade` file under `directory`, recursively.
-fn all_spade_files(directory: &Path, into: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(directory).expect("directory should be readable")
-    {
-        let path = entry.expect("directory should be readable").path();
-        if path.is_dir() {
-            all_spade_files(&path, into);
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "spade")
-        {
-            into.push(path);
-        }
-    }
-}
-
 /// Writes via a temporary file and rename, so the concurrently running panic
 /// sweep never reads a half-written golden.
 fn write_golden(path: &Path, contents: &str) {
@@ -254,7 +239,7 @@ fn write_golden(path: &Path, contents: &str) {
 
 fn assert_clean_output(text: &str, source: &str) {
     assert!(
-        text.ends_with('\n'),
+        text.is_empty() || text.ends_with('\n'),
         "output for {source} does not end with a newline"
     );
     // The same character set `format::into_clean_text` strips.
@@ -426,9 +411,7 @@ fn idempotency() {
 #[test]
 fn corpus_sweep() {
     let config = config();
-    let mut files = vec![];
-    all_spade_files(&asts_dir(), &mut files);
-    files.sort();
+    let files = spade_files(&asts_dir()).expect("asts/ should be readable");
     assert!(!files.is_empty(), "no .spade files found under asts/");
 
     let mut unvisited: Vec<&str> = KNOWN_UNSUPPORTED.to_vec();
@@ -506,9 +489,7 @@ fn stdlib_sweep() {
         return;
     };
     let config = config();
-    let mut files = vec![];
-    all_spade_files(&directory, &mut files);
-    files.sort();
+    let files = spade_files(&directory).expect("the stdlib should be readable");
     assert!(
         !files.is_empty(),
         "no .spade files found under {directory:?}"
@@ -531,9 +512,8 @@ fn stdlib_sweep() {
 #[test]
 fn unsupported_fixtures_report_diagnostics() {
     let config = config();
-    let mut files = vec![];
-    all_spade_files(&asts_dir().join("unsupported"), &mut files);
-    files.sort();
+    let files = spade_files(&asts_dir().join("unsupported"))
+        .expect("asts/unsupported/ should be readable");
     assert!(
         !files.is_empty(),
         "no fixtures found under asts/unsupported/"
@@ -596,6 +576,16 @@ fn unsupported_diagnostics_are_collected() {
             diagnostics.contains(expected),
             "diagnostics do not mention {expected}:\n{diagnostics}"
         );
+    }
+}
+
+/// An input with no content formats to nothing, so an empty file is a
+/// fixed point rather than gaining a newline.
+#[test]
+fn empty_input_formats_to_nothing() {
+    let config = config();
+    for code in ["", "\n", "  \n\t\n"] {
+        assert_eq!(format_str(code, "empty.spade", &config), "", "{code:?}");
     }
 }
 
