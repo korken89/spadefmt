@@ -452,6 +452,34 @@ fn an_empty_file_stays_empty() {
     assert_eq!(fs::read_to_string(&blank).unwrap(), "");
 }
 
+/// Line endings are normalized to LF on input: a CRLF file formats to LF
+/// and is compared in normalized form, so `--check` and `--in-place` leave
+/// one alone whose content is already formatted.
+#[test]
+fn crlf_input_formats_to_lf() {
+    let dir = scratch("crlf_input_formats_to_lf");
+    let bad = dir.join("bad.spade");
+    let good = dir.join("good.spade");
+    write(&bad, &UNFORMATTED.replace('\n', "\r\n"));
+    write(&good, &FORMATTED.replace('\n', "\r\n"));
+    let run = spadefmt(&dir, &["bad.spade"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stdout, FORMATTED);
+    let run = spadefmt(&dir, &["--check", "good.spade", "bad.spade"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert_eq!(run.stdout, "would reformat: bad.spade\n");
+    let run = spadefmt(&dir, &["-i", "good.spade", "bad.spade"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(fs::read_to_string(&bad).unwrap(), FORMATTED);
+    assert_eq!(
+        fs::read_to_string(&good).unwrap(),
+        FORMATTED.replace('\n', "\r\n")
+    );
+    let run = spadefmt(&dir, &["--check", "bad.spade"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stdout, "");
+}
+
 #[test]
 fn stdin_formats_to_stdout() {
     let dir = scratch("stdin_formats_to_stdout");

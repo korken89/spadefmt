@@ -33,7 +33,7 @@ use spade_codespan_reporting::term::termcolor::{
 use spadefmt::{
     cli::{self, Opts},
     config::Config,
-    format::{FormatError, parse_source},
+    format::{FormatError, normalize_line_endings, parse_source},
     walk,
 };
 
@@ -217,19 +217,23 @@ impl Input<'_> {
         }
     }
 
+    /// The input with its line endings normalized: `--check` and
+    /// `--in-place` compare the formatted text against this, so a file
+    /// is rewritten (with LF endings) only when its content changes.
     fn read(self) -> Result<String, CliError> {
-        match self {
+        let code = match self {
             Self::Stdin => {
                 let mut code = String::new();
                 io::stdin()
                     .read_to_string(&mut code)
                     .context(ReadSnafu { path: STDIN })?;
-                Ok(code)
+                code
             }
             Self::File(path) => {
-                fs::read_to_string(path).context(ReadSnafu { path })
+                fs::read_to_string(path).context(ReadSnafu { path })?
             }
-        }
+        };
+        Ok(normalize_line_endings(&code).into_owned())
     }
 
     /// The absolute directory config discovery starts from.

@@ -1,0 +1,44 @@
+#[deprecated = "use g
+instead"]
+fn a() -> bool {
+    true
+}
+
+fn b<#uint N>(x: bool) -> bool where N > 2 else "one   
+two" {
+    let s = "line one   
+line two
+
+  line four";
+    let t = if x {
+        let u = "a
+   
+b";
+        u
+    } else {
+        "c"
+    };
+    g(
+        "x
+y",
+        z,
+    )
+}
+
+fn c(
+    x: T<
+        "hi
+there",
+    >,
+) -> bool {
+    true
+}
+
+fn d() -> bool {
+    let value = g(
+        aaaa,
+        bbbb,
+        "a string long enough to push this line past the eighty column limit",
+    );
+    true
+}

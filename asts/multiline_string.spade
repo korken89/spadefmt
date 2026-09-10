@@ -1,0 +1,4 @@
+fn f<#uint N>(x: bool) -> bool where N > 2 else "line one   
+line two" {
+    x
+}

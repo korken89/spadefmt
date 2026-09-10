@@ -29,8 +29,7 @@ serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.145"
 toml = "0.9.5"
 derivative = "2.2.0"
-inform = "0.3.4"
-itertools = "0.14.0"
+logos = "0.16.1"
 
 [package]
 name = "spadefmt"
@@ -57,8 +56,7 @@ spade-common.workspace = true
 serde.workspace = true
 toml.workspace = true
 derivative.workspace = true
-inform.workspace = true
-itertools.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+logos.workspace = true

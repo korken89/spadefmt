@@ -12,12 +12,12 @@
 // <https://www.gnu.org/licenses/>.
 
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt,
     sync::{Arc, RwLock},
 };
 
-use itertools::Itertools;
 use snafu::{ResultExt, Snafu};
 use spade::error_handling::{ErrorHandler, Reportable};
 use spade_ast::ModuleBody;
@@ -31,15 +31,16 @@ use spade_parser::Comment;
 use crate::{
     comment_insertion::CommentMap,
     config::Config,
-    document::{self, DocumentIdx, InternedDocumentStore},
+    document::{self, DocumentIdx, InternedDocumentStore, Writer},
     document_builder::DocumentBuilder,
     resolve_try_catch::{PrintingContext, resolve_try_catch},
 };
 
 /// The result of successfully formatting a source file.
 pub struct Formatted {
-    /// Formatted source with no trailing whitespace, ending with a newline;
-    /// empty for an input with no content.
+    /// Formatted source with LF line endings, ending with a newline, and no
+    /// trailing whitespace outside string literals; empty for an input with
+    /// no content.
     pub text: String,
     /// Rendered non-fatal parser diagnostics, empty if there were none.
     pub diagnostics: String,
@@ -100,13 +101,24 @@ fn with_error_handler<R>(
     (result, rendered)
 }
 
-/// Parses `code` (from `file_name`, used in diagnostics). `color` enables
-/// ANSI colors in diagnostics.
+/// `code` with `\r\n` line endings normalized to `\n`, the form every
+/// formatting entry point parses and emits.
+pub fn normalize_line_endings(code: &str) -> Cow<'_, str> {
+    if code.contains("\r\n") {
+        Cow::Owned(code.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(code)
+    }
+}
+
+/// Parses `code` (from `file_name`, used in diagnostics) with its line
+/// endings normalized. `color` enables ANSI colors in diagnostics.
 pub fn parse_source(
     file_name: &str,
     code: &str,
     color: bool,
 ) -> Result<Parsed, FormatError> {
+    let code = normalize_line_endings(code);
     let mut files = SimpleFiles::new();
     let file_id = files.add(file_name.to_string(), code.to_string());
 
@@ -115,7 +127,7 @@ pub fn parse_source(
         file_ids: HashMap::from_iter([(file_name.to_string(), file_id)]),
     }));
 
-    let mut parser = spade_parser::Parser::new(code, file_id, None);
+    let mut parser = spade_parser::Parser::new(&code, file_id, None);
 
     let ((root_opt, failed), diagnostics) =
         with_error_handler(&code_bundle, color, |error_handler| {
@@ -132,10 +144,11 @@ pub fn parse_source(
         return ParseSnafu { diagnostics }.fail();
     };
 
+    let comments = parser.comments().to_vec();
     Ok(Parsed {
-        code: code.to_string(),
+        code: code.into_owned(),
         root,
-        comments: parser.comments().to_vec(),
+        comments,
         code_bundle,
         file_id,
         color,
@@ -186,11 +199,9 @@ impl Parsed {
         );
 
         let mut buffer = String::new();
-        let mut f =
-            inform::fmt::IndentWriter::new(&mut buffer, config.indent.inner);
         document::print_resolved(
             &store,
-            &mut f,
+            &mut Writer::new(&mut buffer),
             new_root_idx,
             false,
             &mut false,
@@ -218,28 +229,21 @@ impl Parsed {
         }
 
         let mut buffer = String::new();
-        let mut f =
-            inform::fmt::IndentWriter::new(&mut buffer, config.indent.inner);
-        document::debug_print(&store, &mut f, root_idx).context(PrintSnafu)?;
+        document::debug_print(&store, &mut Writer::new(&mut buffer), root_idx)
+            .context(PrintSnafu)?;
 
         Ok(into_clean_text(buffer))
     }
 }
 
-/// Appends a final newline and strips trailing spaces, tabs, and carriage
-/// returns from every line. Stopping at that set keeps other trailing
-/// characters (e.g. no-break spaces inside comments) intact. A render with
-/// no content at all (an empty or whitespace-only input) is the empty
-/// string, so an empty file is a fixed point.
+/// Appends the final newline. A render with no content at all (an empty or
+/// whitespace-only input) is the empty string, so an empty file is a fixed
+/// point.
 fn into_clean_text(rendered: String) -> String {
     if rendered.trim().is_empty() {
         return String::new();
     }
-    rendered
-        .split('\n')
-        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
-        .join("\n")
-        + "\n"
+    rendered + "\n"
 }
 
 /// Parses and formats `code` in one step; see [`parse_source`] and

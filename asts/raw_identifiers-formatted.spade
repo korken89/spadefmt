@@ -1,0 +1,47 @@
+mod r#inv;
+
+mod r#mod {
+    use a::r#type;
+    use b::{r#match as r#if, plain};
+
+    type r#alias = bool;
+}
+
+#[verilog_attrs(r#key = "v", plain)]
+struct S {
+    r#inv: bool,
+    plain: bool,
+}
+
+enum E {
+    r#match,
+    r#if { r#else: bool },
+    Plain,
+}
+
+trait r#trait {
+    type r#type;
+    fn r#fn(self) -> bool;
+}
+
+impl r#trait for S {
+    type r#type = bool;
+    fn r#fn(self) -> bool {
+        self.r#inv
+    }
+}
+
+fn r#match<#uint r#N, r#T>(r#type: bool, x: r#T) -> bool where r#N > 1 {
+    let s = S$(r#inv: r#type, plain: x);
+    let S$(r#inv: y, plain) = s;
+    let r#let @ _ = y;
+    decl r#decl;
+    let r#decl = r#let;
+    let z = match E::r#if$(r#else: y) {
+        E::r#if$(r#else: w) => w,
+        E::r#match => r#decl,
+        _ => plain,
+    };
+    let t = r#match::$<r#N: 2, r#T: bool>(true, false);
+    s.r#fn() && z && t
+}

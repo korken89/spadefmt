@@ -22,9 +22,6 @@ skip = [
   { crate = "windows-sys@0.52.0", reason = "spade uses this old version" },
   { crate = "windows-sys@0.59.0", reason = "spade uses this old version" },
   { crate = "windows-sys@0.60.2", reason = "spade uses this old version" },
-  { crate = "toml_datetime@0.6.11", reason = "inform@0.3.4 uses this old version" },
-  { crate = "toml@0.8.23", reason = "inform@0.3.4 uses this old version" },
-  { crate = "serde_spanned@0.6.9", reason = "inform@0.3.4 uses this old version" },
   { crate = "syn@1.0.109", reason = "derivative@2.2.0 uses this old version" },
 ]
 

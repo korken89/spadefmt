@@ -39,12 +39,15 @@
 
 use std::{
     env, fs, io,
+    ops::Range,
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::Command,
 };
 
+use logos::Logos;
 use serde::Deserialize;
+use spade_ast::TokenKind;
 use spadefmt::{
     config::Config,
     format::{FormatError, Formatted, format_source},
@@ -237,18 +240,50 @@ fn write_golden(path: &Path, contents: &str) {
     });
 }
 
+/// Byte ranges of the string literals in `text`, the only places allowed to
+/// hold raw newlines and trailing whitespace. Spade strings have no
+/// escapes, so the lexer's string tokens are exact; block comment
+/// interiors are lexed but skipped, as the parser does.
+fn string_literal_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = vec![];
+    let mut depth = 0;
+    let mut lexer = TokenKind::lexer(text);
+    while let Some(token) = lexer.next() {
+        match token {
+            Ok(TokenKind::BlockCommentStart) => depth += 1,
+            Ok(TokenKind::BlockCommentEnd) => depth -= 1,
+            Ok(TokenKind::String(_) | TokenKind::AsciiStringLiteral(_))
+                if depth == 0 =>
+            {
+                spans.push(lexer.span())
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// The output ends with a newline and no line ends in whitespace, except
+/// inside a string literal, whose bytes are the source's.
 fn assert_clean_output(text: &str, source: &str) {
     assert!(
         text.is_empty() || text.ends_with('\n'),
         "output for {source} does not end with a newline"
     );
-    // The same character set `format::into_clean_text` strips.
+    let strings = string_literal_spans(text);
+    let mut line_start = 0;
     for (index, line) in text.split('\n').enumerate() {
+        let line_end = line_start + line.len();
+        let inside_string = strings
+            .iter()
+            .any(|span| span.start < line_end && line_end < span.end);
         assert!(
-            !line.ends_with([' ', '\t', '\r']),
-            "output for {source} has trailing whitespace on line {}",
+            inside_string || !line.ends_with([' ', '\t', '\r']),
+            "output for {source} has trailing whitespace on line {} outside \
+             a string literal",
             index + 1
         );
+        line_start = line_end + 1;
     }
 }
 

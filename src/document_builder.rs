@@ -18,7 +18,7 @@ use spade_ast::token;
 use spade_codespan_reporting::files::{Files, SimpleFile};
 use spade_common::{
     location_info::{FullSpan, Loc, WithLocation},
-    name::{Identifier, Path, Visibility},
+    name::{Identifier, Path, PathSegment, Visibility},
 };
 use spade_diagnostics::{Diagnostic, codespan::Span};
 
@@ -444,6 +444,43 @@ impl<'code> DocumentBuilder<'code> {
         &self.file.borrow().unwrap().source()[range]
     }
 
+    /// An identifier's source text. The lexer strips a raw `r#` prefix
+    /// from the name, so only the span keeps it; a loc that does not hold
+    /// the name (a synthetic one, or a `'label`/`@label` token whose span
+    /// includes the sigil) yields the bare name.
+    fn identifier_text(&self, ident: &Loc<Identifier>) -> String {
+        let name = ident.inner.to_string();
+        let file = self.file.borrow();
+        match file.unwrap().source().get(ident.byte_range()) {
+            Some(slice)
+                if slice == name
+                    || slice.strip_prefix("r#") == Some(name.as_str()) =>
+            {
+                slice.to_string()
+            }
+            _ => name,
+        }
+    }
+
+    fn identifier(&self, ident: &Loc<Identifier>) -> DocumentIdx {
+        self.text(self.identifier_text(ident))
+    }
+
+    fn segment_text(&self, segment: &PathSegment) -> String {
+        match segment {
+            PathSegment::Named(ident) => self.identifier_text(ident),
+            generated => generated.to_string(),
+        }
+    }
+
+    fn path_text(&self, segments: &[PathSegment]) -> String {
+        segments
+            .iter()
+            .map(|segment| self.segment_text(segment))
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
     /// The exact source bytes of `range` as measured text: a token whose
     /// lexeme the AST does not keep (literals). Comments inside the range
     /// are claimed since their text is already part of the slice.
@@ -602,7 +639,10 @@ impl<'code> DocumentBuilder<'code> {
                 list.extend(
                     self.visibility_prefix(&external_module.visibility),
                 );
-                list.push(self.text(format!("mod {};", external_module.name)));
+                list.push(self.text(format!(
+                    "mod {};",
+                    self.identifier_text(&external_module.name)
+                )));
                 self.list(list)
             }
             ast::Item::Module(module) => self.build_module(module, comments),
@@ -660,7 +700,7 @@ impl<'code> DocumentBuilder<'code> {
             ]),
         });
 
-        list.push(self.text(format!(" {}", head.name)));
+        list.push(self.text(format!(" {}", self.identifier_text(&head.name))));
 
         if let Some(type_params) = &head.type_params {
             list.push(self.group(
@@ -766,7 +806,8 @@ impl<'code> DocumentBuilder<'code> {
                     list.push(self.text(format!(" {operator} ")));
                     list.push(self.build_expression(expression, comments));
                     if let Some(message) = if_unsatisfied {
-                        list.push(self.text(format!(" else \"{message}\"")));
+                        list.push(self.text(" else "));
+                        list.push(self.string_literal(message));
                     }
                 }
             }
@@ -789,7 +830,7 @@ impl<'code> DocumentBuilder<'code> {
                 )];
                 list.extend(visibility);
                 list.push(self.text("enum "));
-                list.push(self.text(enum_decl.name.to_string()));
+                list.push(self.identifier(&enum_decl.name));
                 if let Some(generic_args) = &type_declaration.generic_args {
                     list.push(self.group(
                         token::TokenKind::Lt.as_str(),
@@ -829,7 +870,7 @@ impl<'code> DocumentBuilder<'code> {
                 )];
                 list.extend(visibility);
                 list.push(self.text("struct "));
-                list.push(self.text(struct_decl.name.to_string()));
+                list.push(self.identifier(&struct_decl.name));
                 if let Some(generic_args) = &type_declaration.generic_args {
                     list.push(self.group(
                         token::TokenKind::Lt.as_str(),
@@ -866,7 +907,7 @@ impl<'code> DocumentBuilder<'code> {
                 )];
                 list.extend(visibility);
                 list.push(self.text("type "));
-                list.push(self.text(alias.name.to_string()));
+                list.push(self.identifier(&alias.name));
                 if let Some(generic_args) = &type_declaration.generic_args {
                     list.push(self.group(
                         token::TokenKind::Lt.as_str(),
@@ -901,7 +942,7 @@ impl<'code> DocumentBuilder<'code> {
             true,
             comments,
         )];
-        list.push(self.text(variant.name.to_string()));
+        list.push(self.identifier(&variant.name));
         if let Some(parameter_list) = &variant.args {
             let parameter_list_doc =
                 self.build_parameter_list(parameter_list, comments);
@@ -937,7 +978,9 @@ impl<'code> DocumentBuilder<'code> {
         let mut list =
             vec![self.build_attribute_list(&item.attributes, true, comments)];
         list.extend(self.visibility_prefix(&item.visibility));
-        list.push(self.text(format!("mod {} {{", item.name)));
+        list.push(
+            self.text(format!("mod {} {{", self.identifier_text(&item.name))),
+        );
         let body =
             self.build_module_body(&item.body, item.byte_range().end, comments);
         if !self.is_empty(body) {
@@ -1031,7 +1074,9 @@ impl<'code> DocumentBuilder<'code> {
             line.extend([self.text("use "), self.build_path(path)]);
 
             if let Some(alias) = alias {
-                line.push(self.text(format!(" as {alias}")));
+                line.push(
+                    self.text(format!(" as {}", self.identifier_text(alias))),
+                );
             }
 
             line.push(self.text(";"));
@@ -1058,18 +1103,12 @@ impl<'code> DocumentBuilder<'code> {
                 .0
                 .iter()
                 .zip(statement.path.0.iter())
-                .take_while(|(a, b)| a.to_string() == b.to_string())
+                .take_while(|(a, b)| {
+                    self.segment_text(a) == self.segment_text(b)
+                })
                 .count();
             prefix_len = prefix_len.min(common);
         }
-
-        let segment_text = |segments: &[spade_common::name::PathSegment]| {
-            segments
-                .iter()
-                .map(|segment| segment.to_string())
-                .collect::<Vec<_>>()
-                .join("::")
-        };
 
         let mut line =
             vec![self.build_attribute_list(attributes, true, comments)];
@@ -1078,15 +1117,18 @@ impl<'code> DocumentBuilder<'code> {
         if prefix_len > 0 {
             line.push(self.text(format!(
                 "{}::",
-                segment_text(&first.path.0[..prefix_len])
+                self.path_text(&first.path.0[..prefix_len])
             )));
         }
         let entries = statements
             .iter()
             .map(|statement| {
-                let mut entry = segment_text(&statement.path.0[prefix_len..]);
+                let mut entry = self.path_text(&statement.path.0[prefix_len..]);
                 if let Some(alias) = &statement.alias {
-                    entry.push_str(&format!(" as {alias}"));
+                    entry.push_str(&format!(
+                        " as {}",
+                        self.identifier_text(alias)
+                    ));
                 }
                 let doc = self.text(entry);
                 match &statement.alias {
@@ -1248,7 +1290,12 @@ impl<'code> DocumentBuilder<'code> {
             comments,
         )];
         list.extend(self.visibility_prefix(&trait_def.visibility));
-        list.push(self.text(format!("trait {}", trait_def.name)));
+        list.push(
+            self.text(format!(
+                "trait {}",
+                self.identifier_text(&trait_def.name)
+            )),
+        );
         if let Some(type_params) = &trait_def.type_params {
             list.push(self.group(
                 token::TokenKind::Lt.as_str(),
@@ -1279,7 +1326,10 @@ impl<'code> DocumentBuilder<'code> {
                 comments,
                 &mut member_list,
             );
-            member_list.push(self.text(format!("type {}", assoc_type.name)));
+            member_list.push(self.text(format!(
+                "type {}",
+                self.identifier_text(&assoc_type.name)
+            )));
             if let Some(type_params) = &assoc_type.type_params {
                 member_list.push(self.group(
                     token::TokenKind::Lt.as_str(),
@@ -1320,14 +1370,7 @@ impl<'code> DocumentBuilder<'code> {
     }
 
     pub fn build_path(&self, path: &Loc<Path>) -> DocumentIdx {
-        self.text(
-            path.inner
-                .0
-                .iter()
-                .map(|component| component.to_string())
-                .collect::<Vec<_>>()
-                .join("::"),
-        )
+        self.text(self.path_text(&path.inner.0))
     }
 
     pub fn build_statement(
@@ -1336,15 +1379,16 @@ impl<'code> DocumentBuilder<'code> {
         comments: &mut CommentMap,
     ) -> DocumentIdx {
         let (mut list, wants_semi) = match &**statement {
-            ast::Statement::Label(name) => {
-                (vec![self.text(format!("'{name}"))], false)
-            }
+            ast::Statement::Label(name) => (
+                vec![self.text(format!("'{}", self.identifier_text(name)))],
+                false,
+            ),
             ast::Statement::Declaration(names) => (
                 vec![self.text(format!(
                     "decl {}",
                     names
                         .iter()
-                        .map(|name| name.to_string())
+                        .map(|name| self.identifier_text(name))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))],
@@ -1556,7 +1600,8 @@ impl<'code> DocumentBuilder<'code> {
             ast::Expression::ArrayLiteral(elements) => {
                 let range = expression.byte_range();
                 if self.source(range.clone()).starts_with("b\"") {
-                    self.source_text(range, comments)
+                    comments.take_within(&range);
+                    self.verbatim(self.source(range))
                 } else {
                     self.group(
                         token::TokenKind::OpenBracket.as_str(),
@@ -1614,7 +1659,7 @@ impl<'code> DocumentBuilder<'code> {
             ]),
             ast::Expression::FieldAccess(parent, field) => self.list([
                 self.build_expression(parent, comments),
-                self.text(format!(".{field}")),
+                self.text(format!(".{}", self.identifier_text(field))),
             ]),
             ast::Expression::TypeCast(target, ty) => self.list([
                 self.build_expression(target, comments),
@@ -1624,7 +1669,7 @@ impl<'code> DocumentBuilder<'code> {
             ast::Expression::LabelAccess { label, field } => self.list([
                 self.text("@"),
                 self.build_path(label),
-                self.text(format!(".{field}")),
+                self.text(format!(".{}", self.identifier_text(field))),
             ]),
             // Verbatim like `Item::MacroDef`; the span runs from the
             // callee path through the closing delimiter, whose kind only
@@ -1685,7 +1730,7 @@ impl<'code> DocumentBuilder<'code> {
                     ],
                 });
 
-                list.push(self.text(name.to_string()));
+                list.push(self.identifier(name));
 
                 if let Some(turbofish) = turbofish {
                     list.push(self.build_turbofish(turbofish, comments))
@@ -1812,7 +1857,7 @@ impl<'code> DocumentBuilder<'code> {
             ast::Expression::PipelineReference { stage, name, .. } => {
                 let stage_doc = match stage {
                     ast::PipelineStageReference::Absolute(identifier) => {
-                        self.text(identifier.to_string())
+                        self.identifier(identifier)
                     }
                     // The parser eats the mandatory sign; `-` survives
                     // as a synthetic outer negation.
@@ -1851,7 +1896,7 @@ impl<'code> DocumentBuilder<'code> {
                 self.list([
                     self.text("stage("),
                     stage_doc,
-                    self.text(format!(").{name}")),
+                    self.text(format!(").{}", self.identifier_text(name))),
                 ])
             }
             ast::Expression::TypeLevelIf {
@@ -1864,11 +1909,7 @@ impl<'code> DocumentBuilder<'code> {
             ]),
             ast::Expression::StageValid => self.text("stage.valid"),
             ast::Expression::StageReady => self.text("stage.ready"),
-            // Spade strings have no escape sequences, so the parsed
-            // value is the exact source text.
-            ast::Expression::StrLiteral(value) => {
-                self.text(format!("\"{}\"", **value))
-            }
+            ast::Expression::StrLiteral(value) => self.string_literal(value),
             ast::Expression::Parenthesized(inner) => self.list([
                 self.token(token::TokenKind::OpenParen),
                 self.build_expression(inner, comments),
@@ -2134,10 +2175,10 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match named_turbofish {
             ast::NamedTurbofish::Full(name, value) => self.list([
-                self.text(format!("{name}: ")),
+                self.text(format!("{}: ", self.identifier_text(name))),
                 self.build_type_expression(value, comments),
             ]),
-            ast::NamedTurbofish::Short(name) => self.text(name.to_string()),
+            ast::NamedTurbofish::Short(name) => self.identifier(name),
         }
     }
 
@@ -2148,10 +2189,10 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match named_argument {
             ast::NamedArgument::Full(name, current) => self.list([
-                self.text(format!("{name}: ")),
+                self.text(format!("{}: ", self.identifier_text(name))),
                 self.build_expression(current, comments),
             ]),
-            ast::NamedArgument::Short(name) => self.text(name.to_string()),
+            ast::NamedArgument::Short(name) => self.identifier(name),
         }
     }
 
@@ -2166,7 +2207,7 @@ impl<'code> DocumentBuilder<'code> {
                 self.signed_literal(pattern.byte_range(), comments)
             }
             ast::Pattern::Bound(name, inner) => self.list([
-                self.text(format!("{name} @ ")),
+                self.text(format!("{} @ ", self.identifier_text(name))),
                 self.build_pattern(inner, comments),
             ]),
             ast::Pattern::Path { wire, path } => {
@@ -2261,10 +2302,10 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         match &argument.1 {
             Some(pattern) => self.list([
-                self.text(format!("{}: ", argument.0)),
+                self.text(format!("{}: ", self.identifier_text(&argument.0))),
                 self.build_pattern(pattern, comments),
             ]),
-            None => self.text(argument.0.to_string()),
+            None => self.identifier(&argument.0),
         }
     }
 
@@ -2286,11 +2327,7 @@ impl<'code> DocumentBuilder<'code> {
                 self.build_expression(expression, comments),
                 self.text("}"),
             ]),
-            // Same no-escape lexing as string literals: the parsed
-            // value is the exact source text.
-            ast::TypeExpression::String(value) => {
-                self.text(format!("\"{value}\""))
-            }
+            ast::TypeExpression::String(value) => self.string_literal(value),
         }
     }
 
@@ -2365,7 +2402,7 @@ impl<'code> DocumentBuilder<'code> {
                 traits,
                 default,
             } => {
-                let mut list = vec![self.text(name.to_string())];
+                let mut list = vec![self.identifier(name)];
                 if !traits.is_empty() {
                     let mut flatten_list = vec![];
                     let mut nest_list = vec![];
@@ -2411,7 +2448,11 @@ impl<'code> DocumentBuilder<'code> {
                 name,
                 default,
             } => {
-                let mut list = vec![self.text(format!("#{meta} {name}"))];
+                let mut list =
+                    vec![self.text(format!(
+                        "#{meta} {}",
+                        self.identifier_text(name)
+                    ))];
                 if let Some(default) = default {
                     list.extend([
                         self.text(" = "),
@@ -2516,15 +2557,18 @@ impl<'code> DocumentBuilder<'code> {
                 if *all { "(all)" } else { "" }
             )),
             ast::Attribute::Fsm { state } => match state {
-                Some(state) => self.text(format!("#[fsm({state})]")),
+                Some(state) => self
+                    .text(format!("#[fsm({})]", self.identifier_text(state))),
                 None => self.text("#[fsm]"),
             },
             ast::Attribute::Documentation { content } => {
                 self.text(format!("///{content}"))
             }
-            ast::Attribute::SurferTranslator(name) => {
-                self.text(format!("#[surfer_translator(\"{name}\")]"))
-            }
+            ast::Attribute::SurferTranslator(name) => self.list([
+                self.text("#[surfer_translator("),
+                self.string_literal(name),
+                self.text(")]"),
+            ]),
             ast::Attribute::SpadecParenSugar => {
                 self.text("#[spadec_paren_sugar]")
             }
@@ -2534,29 +2578,39 @@ impl<'code> DocumentBuilder<'code> {
             // and print as `since, note`.
             ast::Attribute::Deprecated { since, note } => match (since, note) {
                 (None, None) => self.text("#[deprecated]"),
-                (None, Some(note)) => {
-                    self.text(format!("#[deprecated = \"{}\"]", note.inner))
-                }
-                (Some(since), None) => self.text(format!(
-                    "#[deprecated(since = \"{}\")]",
-                    since.inner
-                )),
-                (Some(since), Some(note)) => self.text(format!(
-                    "#[deprecated(since = \"{}\", note = \"{}\")]",
-                    since.inner, note.inner
-                )),
+                (None, Some(note)) => self.list([
+                    self.text("#[deprecated = "),
+                    self.string_literal(&note.inner),
+                    self.text("]"),
+                ]),
+                (Some(since), None) => self.list([
+                    self.text("#[deprecated(since = "),
+                    self.string_literal(&since.inner),
+                    self.text(")]"),
+                ]),
+                (Some(since), Some(note)) => self.list([
+                    self.text("#[deprecated(since = "),
+                    self.string_literal(&since.inner),
+                    self.text(", note = "),
+                    self.string_literal(&note.inner),
+                    self.text(")]"),
+                ]),
             },
-            ast::Attribute::VerilogAttrs { entries } => self.text(format!(
-                "#[verilog_attrs({})]",
-                entries
-                    .iter()
-                    .map(|(key, value)| match value {
-                        Some(value) => format!("{key} = \"{}\"", value.inner),
-                        None => key.to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
+            ast::Attribute::VerilogAttrs { entries } => {
+                let mut list = vec![self.text("#[verilog_attrs(")];
+                for (i, (key, value)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        list.push(self.text(", "));
+                    }
+                    list.push(self.identifier(key));
+                    if let Some(value) = value {
+                        list.push(self.text(" = "));
+                        list.push(self.string_literal(&value.inner));
+                    }
+                }
+                list.push(self.text(")]"));
+                self.list(list)
+            }
         }
     }
 
@@ -2605,7 +2659,7 @@ impl<'code> DocumentBuilder<'code> {
             list.push(self.text("wire "));
         }
         list.extend([
-            self.text(format!("{}: ", parameter.2)),
+            self.text(format!("{}: ", self.identifier_text(&parameter.2))),
             self.build_type_spec(&parameter.3, comments),
         ]);
         self.list(list)
@@ -2618,7 +2672,7 @@ impl<'code> DocumentBuilder<'code> {
     ) -> DocumentIdx {
         let mut list = vec![];
         if let Some(label) = &element.0 {
-            list.push(self.text(format!("'{label} ")));
+            list.push(self.text(format!("'{} ", self.identifier_text(label))));
         }
         list.push(self.build_expression(&element.1, comments));
         self.list(list)
@@ -2743,11 +2797,26 @@ impl<'code> DocumentBuilder<'code> {
     }
 
     fn text(&self, text: impl Into<String>) -> DocumentIdx {
-        self.inner.borrow_mut().add(Document::Text(text.into()))
+        let text = text.into();
+        debug_assert!(
+            !text.contains('\n'),
+            "line breaks are Newline documents: {text:?}"
+        );
+        self.inner.borrow_mut().add(Document::Text(text))
     }
 
     fn raw_text(&self, raw_text: impl Into<String>) -> DocumentIdx {
         self.inner.borrow_mut().add(Document::Raw(raw_text.into()))
+    }
+
+    fn verbatim(&self, text: impl Into<String>) -> DocumentIdx {
+        self.inner.borrow_mut().add(Document::Verbatim(text.into()))
+    }
+
+    /// A string literal, which may hold raw newlines. Spade strings have
+    /// no escape sequences, so the parsed value is the exact source text.
+    fn string_literal(&self, value: impl std::fmt::Display) -> DocumentIdx {
+        self.verbatim(format!("\"{value}\""))
     }
 
     fn token(&self, text: token::TokenKind) -> DocumentIdx {

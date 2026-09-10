@@ -127,28 +127,11 @@ pub fn resolve_try_catch(
             // on its first push.
             try_context.tainted = false;
 
-            //println!("\ntrying from {:?}", try_context);
-            //let mut buffer = String::new();
-            //let mut f = inform::fmt::IndentWriter::new(&mut buffer, 4);
-            //crate::document::debug_print(store, &mut f, try_body_idx)
-            //    .expect("a");
-            //println!("{}", buffer);
-
             let new_try_body_idx =
                 resolve_try_catch(store, try_body_idx, &mut try_context);
             if try_context.tainted && !context.trying {
                 let mut catch_context = context.clone();
                 catch_context.tainted = false;
-
-                //println!(
-                //    "\nfailed to flatten, doing nest from {:?}",
-                //    catch_context
-                //);
-                //let mut buffer = String::new();
-                //let mut f = inform::fmt::IndentWriter::new(&mut buffer, 4);
-                //crate::document::debug_print(store, &mut f, catch_body_idx)
-                //    .expect("a");
-                //println!("{}", buffer);
 
                 let new_catch_body_idx = resolve_try_catch(
                     store,
@@ -156,7 +139,6 @@ pub fn resolve_try_catch(
                     &mut catch_context,
                 );
                 *context = catch_context;
-                //println!("\nnested (now tainted = {})", context.tainted);
                 new_catch_body_idx
             } else {
                 try_context.trying = context.trying;
@@ -164,7 +146,6 @@ pub fn resolve_try_catch(
                 // enclosing try still sees it.
                 try_context.tainted |= context.tainted;
                 *context = try_context;
-                //println!("\nflattened (now tainted = {})", context.tainted);
                 new_try_body_idx
             }
         }
@@ -184,5 +165,22 @@ pub fn resolve_try_catch(
             );
             idx
         }
+        Document::Verbatim(text) => match text.split_once('\n') {
+            None => {
+                context.push(text.len());
+                idx
+            }
+            // The first line is measured like text; the rest sit at their
+            // own columns, and a line break cannot be flattened away.
+            Some((first_line, rest)) => {
+                if context.flatten {
+                    context.tainted = true;
+                }
+                context.push(first_line.len());
+                context.column =
+                    rest.rsplit_once('\n').map_or(rest, |(_, last)| last).len();
+                idx
+            }
+        },
     }
 }

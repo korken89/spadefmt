@@ -1,0 +1,30 @@
+fn f(x: bool) -> bool {
+    /* ragged
+         
+       block
+      
+     comment */
+    let y = if x {
+        let z = true;
+        
+        z
+    } else {
+        false
+    };
+
+    let w = if y {
+        let v = if x {
+            let u = true;
+
+            u
+        } else {
+            false
+        };
+
+        v
+    } else {
+        false
+    };
+
+    w
+}
