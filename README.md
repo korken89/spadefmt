@@ -69,3 +69,28 @@ built binary through config discovery, the output modes, and the exit codes.
 The full corpus includes the `asts/swim-templates` submodule; fetch it with
 `git submodule update --init` (or clone with `--recursive`). Without it the
 swim-templates part of the corpus sweep is skipped.
+
+## Nix
+
+The repository is a flake. Run it without installing:
+
+```
+nix run github:korken89/spadefmt -- --check src/
+```
+
+Use it from another flake:
+
+```nix
+{
+  inputs.spadefmt.url = "github:korken89/spadefmt";
+
+  outputs = { self, nixpkgs, spadefmt, ... }: {
+    # a package: spadefmt.packages.${system}.default
+    # or an overlay: nixpkgs.overlays = [ spadefmt.overlays.default ];
+  };
+}
+```
+
+`nix develop` gives a shell with the pinned stable toolchain, rust-analyzer,
+and a nightly `rustfmt` wired to `cargo fmt` (the repo's `.rustfmt.toml`
+uses nightly-only options).
